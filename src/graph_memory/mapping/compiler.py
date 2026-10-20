@@ -12,6 +12,7 @@ replay convergence provable (SPEC §3). Consequences:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -53,12 +54,23 @@ class ProjectionPlan:
     edges: tuple[EdgeOp, ...]
 
 
-def compile_plan(spec: MappingSpec, tenant: TenantId, envelope: Envelope) -> ProjectionPlan:
+def compile_plan(
+    spec: MappingSpec,
+    tenant: TenantId,
+    envelope: Envelope,
+    *,
+    weight_overrides: Mapping[tuple[str, str], float] | None = None,
+) -> ProjectionPlan:
     """Compile one validated envelope into its projection plan.
 
     Every mapped event also upserts the USER node (keyed by the raw user key,
     label ``user``) — edge endpoints must exist for the graph to serve cypher
     matches without dangling references.
+
+    ``weight_overrides`` (the effectiveness loop's output, keyed
+    ``(kind, target)``) multiply the spec's base weight INSIDE the pure
+    function — replay stays a pure function of
+    ``(ledger, spec version, overrides, clock)``.
     """
     context = envelope_context(envelope)
     user = UserKey(str(context["partitionkey"]))
@@ -80,16 +92,24 @@ def compile_plan(spec: MappingSpec, tenant: TenantId, envelope: Envelope) -> Pro
             for node in rule.nodes
         ),
     )
-    edges = tuple(
-        EdgeOp(
-            tenant=tenant,
-            user=user,
-            kind=edge.kind,
-            target=resolve_template(edge.target, context),
-            weight=edge.weight,
-            half_life_days=edge.half_life_days,
-            valid_at=envelope.occurred_at,
+    edges: list[EdgeOp] = []
+    for edge in rule.edges:
+        target = resolve_template(edge.target, context)
+        edges.append(
+            EdgeOp(
+                tenant=tenant,
+                user=user,
+                kind=edge.kind,
+                target=target,
+                weight=edge.weight * _override(weight_overrides, edge.kind, target),
+                half_life_days=edge.half_life_days,
+                valid_at=envelope.occurred_at,
+            )
         )
-        for edge in rule.edges
-    )
-    return ProjectionPlan(tenant=tenant, signal=envelope.type, nodes=nodes, edges=edges)
+    return ProjectionPlan(tenant=tenant, signal=envelope.type, nodes=nodes, edges=tuple(edges))
+
+
+def _override(overrides: Mapping[tuple[str, str], float] | None, kind: str, target: str) -> float:
+    if overrides is None:
+        return 1.0
+    return overrides.get((kind, target), 1.0)

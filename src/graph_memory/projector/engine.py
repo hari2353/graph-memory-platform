@@ -14,7 +14,7 @@ Determinism rules (SPEC §3, plan §3 risk 2):
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import combinations
@@ -101,11 +101,14 @@ class Projector:
         ledger: LedgerRepository,
         gateway: GraphGateway,
         clock: Clock,
+        *,
+        weight_overrides: Mapping[tuple[str, str], float] | None = None,
     ) -> None:
         self._spec = spec
         self._ledger = ledger
         self._gateway = gateway
         self._clock = clock
+        self._overrides = weight_overrides
 
     def process_events(self, events: Sequence[StoredEvent]) -> ProjectionDigest:
         """Incremental projection for one batch, in canonical order."""
@@ -133,7 +136,7 @@ class Projector:
         rule = self._spec.signals.get(event.signal)
         if rule is None:
             return ProjectionDigest(events=0, plans=0, node_ops=0, edge_ops=0)
-        plan = compile_plan(self._spec, event.tenant, envelope)
+        plan = compile_plan(self._spec, event.tenant, envelope, weight_overrides=self._overrides)
         ops: list[NodeOp | EdgeOp] = []
         ops.extend(plan.nodes)
         ops.extend(plan.edges)

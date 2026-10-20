@@ -25,6 +25,13 @@ signals:
         target: "skill:{data.skill}"
         weight: 2.0
         half_life_days: 30
+# Effectiveness loop wiring (SPEC §10): reco emissions + outcome verdicts
+# attaching by correlation_id; cohorts are an app-declared attribute.
+effectiveness:
+  reco_signals: [itf.reco.v1]
+  outcome_signals: [itf.outcome.v1]
+  correlation_field: "data.correlation_id"
+  cohort_field: "data.cohort"
 capabilities:
   skills:
     relations: [HAS_SKILL]

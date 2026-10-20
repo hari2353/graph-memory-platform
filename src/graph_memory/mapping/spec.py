@@ -207,6 +207,43 @@ class CapabilityRule(BaseModel):
         return value
 
 
+_FIELD_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$|^data\.[A-Za-z0-9_.]{1,63}$")
+
+
+class EffectivenessSpec(BaseModel):
+    """Outcome-attach configuration (SPEC §10), additive to the v1 grammar.
+
+    ``reco_signals`` emit recommendations (their edge rule carries the target
+    recommendation-class writes); ``outcome_signals`` carry verdicts that
+    attach to the origin by ``correlation`` field. Cohorts are whatever
+    attribute the app declares in ``cohort_field`` — no platform opinion.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reco_signals: tuple[str, ...]
+    outcome_signals: tuple[str, ...]
+    correlation_field: str = "data.correlation_id"
+    cohort_field: str = "data.cohort"
+    verdict_field: str = "data.verdict"
+    verdicts_positive: tuple[str, ...] = ("acted_on", "outcome_improved")
+    alpha: Annotated[float, Field(ge=0.0, le=10.0)] = 1.0
+
+    @field_validator("reco_signals", "outcome_signals")
+    @classmethod
+    def _signals_are_platform_types(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for name in value:
+            signal_type(name)
+        return value
+
+    @field_validator("correlation_field", "cohort_field", "verdict_field")
+    @classmethod
+    def _field_routes(cls, value: str) -> str:
+        if not _FIELD_PATTERN.match(value):
+            raise PydanticCustomError("mapping_error", f"unsafe field route {value!r}")
+        return value
+
+
 class MappingSpec(BaseModel):
     """Version-pinned, immutable mapping spec root."""
 
@@ -215,6 +252,7 @@ class MappingSpec(BaseModel):
     mapping_version: Literal[1]
     signals: dict[str, SignalRule]
     capabilities: dict[str, CapabilityRule] = Field(default_factory=dict)
+    effectiveness: EffectivenessSpec | None = None
 
     @field_validator("signals")
     @classmethod
@@ -235,6 +273,19 @@ class MappingSpec(BaseModel):
                 raise PydanticCustomError(
                     "mapping_error",
                     f"capability {name!r} references undeclared kinds {unknown!r}",
+                )
+        if self.effectiveness is not None:
+            unknown_reco = [
+                name for name in self.effectiveness.reco_signals if name not in self.signals
+            ]
+            unknown_outcome = [
+                name for name in self.effectiveness.outcome_signals if name not in self.signals
+            ]
+            if unknown_reco or unknown_outcome:
+                missing = unknown_reco + unknown_outcome
+                raise PydanticCustomError(
+                    "mapping_error",
+                    f"effectiveness references signals {missing!r} absent from `signals`",
                 )
         return self
 
