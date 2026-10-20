@@ -121,8 +121,11 @@ session; each lands green with its acceptance test. Pr/local only until push
   - Acceptance: the observer is advisory evidence, never kernel control flow
   - Verify: ScriptedLlmObserver records gmp.observer.* spans (verdict/reason) through the SpanSink port with the injected clock; NoopObserver silent; the protocol returns a dict — nothing an observer says can mutate graph state.
   - Files: src/graph_memory/observability/{observer.py,__init__.py}
-- [ ] Task: demo POC repo (Pulsar + AI-generated signals) against deployed platform
-  - Status: in progress — F:\graph-memory-platform-poc (producer + AI-signal generator hitting the platform's HTTP ingest)
+- [x] Task: demo POC repo (Pulsar + AI-generated signals) against deployed platform
+  - Acceptance: an agent-app POC pushes ITF-shaped signals and reads the personalized context back
+  - Verify: tests/test_poc_demo.py (generator determinism + correlation binding + batch chunking); LIVE demo run against `platform serve` — 16 events generated/ingested, context for demo-user-0000 served identically by REST and MCP (parity OK), worked demo ports; Pulsar path ships as producer_pulsar.py behind the [pulsar] extra.
+  - Files: F:\graph-memory-platform-poc (public: github.com/hari2353/graph-memory-platform-poc)
+  - Ops note: `platform serve` gained the composition-root projection loop (convergent replay every 1s + cache clear) and the ClickHouse adapters gained per-thread clients — ingest → projection → context is now a live one-terminal loop.
 
 ## Backlog (post-M3, recorded only)
 
