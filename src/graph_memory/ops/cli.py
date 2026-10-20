@@ -86,3 +86,17 @@ def hotpath(requests: int, users: int, p99_budget: str) -> None:
     click.echo(report.render())
     if not report.passed:
         raise SystemExit(1)
+
+
+@bench.command("cost")
+@click.option("--events-per-day", default=350_000_000, show_default=True)
+@click.option("--months", default=12, show_default=True, help="retention window")
+@click.option("--codec-ratio", default=10.0, show_default=True, help="ZSTD-3 columnar")
+def cost(events_per_day: int, months: int, codec_ratio: float) -> None:
+    """Recompute the §12 storage estimate from the synthetic fixture (exit 1 on drift)."""
+    from graph_memory.ops.cost import recomputed_report, within_budget
+
+    report = recomputed_report(events_per_day, months, codec_ratio=codec_ratio)
+    click.echo(report.render())
+    if not within_budget(report):
+        raise SystemExit(1)

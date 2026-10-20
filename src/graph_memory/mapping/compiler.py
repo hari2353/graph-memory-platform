@@ -17,7 +17,12 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from graph_memory.core.types import TenantId, UserKey
-from graph_memory.mapping.spec import MappingSpec, envelope_context, resolve_template
+from graph_memory.mapping.spec import (
+    MappingSpec,
+    envelope_context,
+    envelope_route,
+    resolve_template,
+)
 from graph_memory.signals.envelope import Envelope
 
 
@@ -59,7 +64,7 @@ def compile_plan(
     tenant: TenantId,
     envelope: Envelope,
     *,
-    weight_overrides: Mapping[tuple[str, str], float] | None = None,
+    weight_overrides: Mapping[tuple[str, str, str], float] | None = None,
 ) -> ProjectionPlan:
     """Compile one validated envelope into its projection plan.
 
@@ -68,15 +73,21 @@ def compile_plan(
     matches without dangling references.
 
     ``weight_overrides`` (the effectiveness loop's output, keyed
-    ``(kind, target)``) multiply the spec's base weight INSIDE the pure
-    function — replay stays a pure function of
-    ``(ledger, spec version, overrides, clock)``.
+    ``(kind, target, cohort)``) multiply the spec's base weight INSIDE the
+    pure function — replay stays a pure function of
+    ``(ledger, spec version, overrides, clock)``. The cohort comes from the
+    event's declared route, so weight rows apply per cohort, not globally.
     """
     context = envelope_context(envelope)
     user = UserKey(str(context["partitionkey"]))
     rule = spec.signals.get(envelope.type)
     if rule is None:
         return ProjectionPlan(tenant=tenant, signal=envelope.type, nodes=(), edges=())
+    cohort = (
+        ""
+        if not weight_overrides or spec.effectiveness is None
+        else envelope_route(envelope, spec.effectiveness.cohort_field) or ""
+    )
     user_node = NodeOp(tenant=tenant, key=str(user), labels=("user",), props={"name": str(user)})
     nodes = (
         user_node,
@@ -101,7 +112,7 @@ def compile_plan(
                 user=user,
                 kind=edge.kind,
                 target=target,
-                weight=edge.weight * _override(weight_overrides, edge.kind, target),
+                weight=edge.weight * _override(weight_overrides, edge.kind, target, cohort),
                 half_life_days=edge.half_life_days,
                 valid_at=envelope.occurred_at,
             )
@@ -109,7 +120,9 @@ def compile_plan(
     return ProjectionPlan(tenant=tenant, signal=envelope.type, nodes=nodes, edges=tuple(edges))
 
 
-def _override(overrides: Mapping[tuple[str, str], float] | None, kind: str, target: str) -> float:
-    if overrides is None:
+def _override(
+    overrides: Mapping[tuple[str, str, str], float] | None, kind: str, target: str, cohort: str
+) -> float:
+    if not overrides:
         return 1.0
-    return overrides.get((kind, target), 1.0)
+    return overrides.get((kind, target, cohort), 1.0)

@@ -91,6 +91,25 @@ def envelope_context(envelope: Envelope) -> dict[str, Json]:
     }
 
 
+def envelope_route(envelope: Envelope, field_path: str) -> str | None:
+    """``data.cohort`` / ``data.meta.cohort`` -> scalar-as-string, or None.
+
+    The shared router for loop-attached fields (correlation, cohort, class,
+    verdict). Routes must be ``data.*`` paths — envelope attributes are
+    reserved for the platform, apps declare attributes inside ``data``.
+    """
+    if not field_path.startswith("data.") or field_path == "data.":
+        raise ValueError(f"effectiveness fields must route through data: {field_path!r}")
+    node: Json = dict(envelope.data)
+    for part in field_path.split(".")[1:]:
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    if isinstance(node, (dict, list)):
+        raise ValueError(f"effectiveness field {field_path!r} must route to a scalar")
+    return str(node)
+
+
 def _validate_template(raw: str) -> None:
     if "\x00" in raw or len(raw) > 512:
         raise PydanticCustomError("mapping_error", "template too long or unsafe")
@@ -225,6 +244,7 @@ class EffectivenessSpec(BaseModel):
     outcome_signals: tuple[str, ...]
     correlation_field: str = "data.correlation_id"
     cohort_field: str = "data.cohort"
+    class_field: str = "data.reco_class"
     verdict_field: str = "data.verdict"
     verdicts_positive: tuple[str, ...] = ("acted_on", "outcome_improved")
     alpha: Annotated[float, Field(ge=0.0, le=10.0)] = 1.0
@@ -236,7 +256,7 @@ class EffectivenessSpec(BaseModel):
             signal_type(name)
         return value
 
-    @field_validator("correlation_field", "cohort_field", "verdict_field")
+    @field_validator("correlation_field", "cohort_field", "class_field", "verdict_field")
     @classmethod
     def _field_routes(cls, value: str) -> str:
         if not _FIELD_PATTERN.match(value):

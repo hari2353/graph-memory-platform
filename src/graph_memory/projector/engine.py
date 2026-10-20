@@ -102,7 +102,7 @@ class Projector:
         gateway: GraphGateway,
         clock: Clock,
         *,
-        weight_overrides: Mapping[tuple[str, str], float] | None = None,
+        weight_overrides: Mapping[tuple[str, str, str], float] | None = None,
     ) -> None:
         self._spec = spec
         self._ledger = ledger
