@@ -23,7 +23,15 @@ from starlette.applications import Starlette
 
 from graph_memory.core.errors import PlatformError, ScopeDenied
 from graph_memory.core.ports import ContextProvider, TenantGuard
-from graph_memory.core.types import Capability, Json, Scope, UserRef, user_key
+from graph_memory.core.types import (
+    Capability,
+    Json,
+    Principal,
+    Scope,
+    UserRef,
+    user_key,
+)
+from graph_memory.tenancy.quotas import QuotaGuard
 
 PROTOCOL_REVISION = "2026-07-28"  # the stateless JSON posture this server pins
 SERVER_VERSION = "0.1.0"
@@ -91,6 +99,7 @@ def build_mcp_server(
     signal_schemas: Mapping[str, dict[str, Json]],
     name: str = "graph-memory-platform",
     version: str = SERVER_VERSION,
+    quota: QuotaGuard | None = None,
 ) -> MCPServer:
     """Assemble the ≤4 tools around the injected ports (dependency inversion).
 
@@ -109,6 +118,11 @@ def build_mcp_server(
         middleware=[BearerHeaderTransport()],
     )
 
+    def _admit(principal: Principal, needed: Scope) -> None:
+        """Per-tenant metering on every request class (SPEC §11/§17)."""
+        if quota is not None:
+            quota.admit(principal, needed)
+
     @server.tool(
         name="get_context",
         title="Get user context",
@@ -121,6 +135,7 @@ def build_mcp_server(
     @_platform_errors
     async def get_context(user: str, capability: str) -> dict[str, Json]:
         principal = guard.require_scope(_bearer(), Scope.CONTEXT_READ)
+        _admit(principal, Scope.CONTEXT_READ)
         ref = UserRef(tenant=principal.tenant, user_key=user_key(user))
         ctx = await provider.get(principal, ref, Capability(capability))
         stale_at = ctx.generated_at.timestamp() + ctx.max_age_ms / 1000.0
@@ -150,6 +165,7 @@ def build_mcp_server(
         limit: int = _DEFAULT_SEARCH_LIMIT,
     ) -> dict[str, Json]:
         principal = guard.require_scope(_bearer(), Scope.MEMORY_SEARCH)
+        _admit(principal, Scope.MEMORY_SEARCH)
         ref = UserRef(tenant=principal.tenant, user_key=user_key(user))
         ctx = await provider.get(principal, ref, Capability(capability))
         return {

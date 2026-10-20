@@ -20,6 +20,7 @@ from graph_memory.core.types import Json, Scope
 from graph_memory.settings import Settings
 from graph_memory.signals.ledger import LedgerRepository
 from graph_memory.signals.service import PoisonSink
+from graph_memory.tenancy.quotas import QuotaGuard
 
 _HEALTH = {"status": "ok"}
 
@@ -47,10 +48,13 @@ def _status_for(exc: PlatformError) -> int:
         details = exc.details or {}
         unknown = details.get("reason") == "unknown_credential"
         return 401 if unknown else 403
+    if exc.code in {"tenant_revoked", "tenant_suspended", "tenant_not_found"}:
+        return 403
     return {
         "envelope_invalid": 400,
         "tenant_mismatch": 400,
         "quota_exceeded": 429,
+        "batch_over_budget": 429,
     }.get(exc.code, 500)
 
 
@@ -60,6 +64,7 @@ def create_app(
     *,
     settings: Settings | None = None,
     poison: PoisonSink | None = None,
+    quota: QuotaGuard | None = None,
 ) -> FastAPI:
     """Assemble the ingest app around injected ports (no framework leakage)."""
     from graph_memory.signals.service import IngestService  # local: avoids cycles
@@ -80,6 +85,8 @@ def create_app(
             principal = guard.require_scope(_bearer_from(authorization), Scope.SIGNALS_WRITE)
         except PlatformError as exc:
             raise HTTPException(status_code=_status_for(exc), detail=exc.to_payload()) from exc
+        if quota is not None:
+            quota.admit(principal, Scope.SIGNALS_WRITE, amount=len(body.signals) or 1)
         service = IngestService(principal, ledger, settings=bounds, poison=poison)
         try:
             outcome = await asyncio.to_thread(service.apply_raw, list(body.signals))

@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse, Response
 from graph_memory.core.errors import PlatformError
 from graph_memory.core.ports import ContextProvider, TenantGuard
 from graph_memory.core.types import Capability, Json, Scope, UserContext, UserRef, user_key
+from graph_memory.tenancy.quotas import QuotaGuard
 
 _IDEMPOTENCY_TTL_S = 86_400
 _MAX_ITEM_LIMIT = 100
@@ -47,6 +48,8 @@ def _status_for(exc: PlatformError) -> int:
         return 401 if details.get("reason") == "unknown_credential" else 403
     if exc.code == "capability_unknown":
         return 404
+    if exc.code in {"tenant_revoked", "tenant_suspended", "tenant_not_found"}:
+        return 403
     return {"tenant_mismatch": 400, "quota_exceeded": 429, "batch_over_budget": 429}.get(
         exc.code, 500
     )
@@ -95,7 +98,12 @@ def _ranked_items(payload: dict[str, Json]) -> list[tuple[str, Json]]:
     return ranked
 
 
-def create_rest_app(provider: ContextProvider, guard: TenantGuard) -> FastAPI:
+def create_rest_app(
+    provider: ContextProvider,
+    guard: TenantGuard,
+    *,
+    quota: QuotaGuard | None = None,
+) -> FastAPI:
     """Assemble the REST channel around injected ports (no framework leakage)."""
     app = FastAPI(title="graph-memory-platform/rest", version="0.1.0")
     # Idempotency-Key replay store: (tenant, user, capability, key) -> (expiry, body).
@@ -107,6 +115,8 @@ def create_rest_app(provider: ContextProvider, guard: TenantGuard) -> FastAPI:
         """One checked read: guard first, tenant from claims only (SPEC §8/§15)."""
         try:
             principal = guard.require_scope(_bearer_from(authorization), scope)
+            if quota is not None:
+                quota.admit(principal, scope)
             return await provider.get(
                 principal, UserRef(principal.tenant, user_key(user)), Capability(capability)
             )
