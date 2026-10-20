@@ -74,14 +74,30 @@ session; each lands green with its acceptance test. Pr/local only until push
 
 ## M2 — surfaces
 
-- [ ] Task: MCP server stateless (2026-07-28 JSON mode) with ≤4 tools + compat mode
-- [ ] Task: REST `/v1` context endpoints (cursor pagination, ETag, Idempotency-Key)
-- [ ] Task: webhook channel (HMAC sign, retry ladder, endpoint disable)
-- [ ] Task: SDK-thin python client + channel parity e2e
-- [ ] Task: `tenancy` registry + quotas + two-phase offboarding + 7k onboarding bench
-- [ ] Task: tenant guard injected predicate hardening (mismatch = fail closed)
-- [ ] Task: broker adapters Kafka/Pulsar/NATS via conformance kit
-- [ ] Task: SLA bench in CI (synthetic profile, p99 ≤1s)
+- [x] Task: MCP server stateless (2026-07-28 JSON mode) with ≤4 tools + compat mode
+  - Verify: tests/unit/test_mcp_channel.py — real ASGI app under uvicorn + official SDK client: 4 tools (get_context/search_memory/list_capabilities/get_signal_schema), tenant never a tool arg, structured content with staleness metadata, PlatformError payloads ride tool errors; stateless POST → JSON without session id, compat mode → session id. PROTOCOL_REVISION pinned 2026-07-28.
+  - Files: src/graph_memory/channels/mcp/server.py
+- [x] Task: REST `/v1` context endpoints (cursor pagination, ETag, Idempotency-Key)
+  - Verify: tests/unit/test_rest_channel.py — ETag/304 revalidation, Cache-Control from provider max_age (never invented), cursor walk without repeats (+400 on bogus cursor), idempotent prefetch replay header; cross-tenant access unrepresentable (tenant rides the credential).
+  - Files: src/graph_memory/channels/rest/{api.py,__init__.py}
+- [x] Task: webhook channel (HMAC sign, retry ladder, endpoint disable)
+  - Verify: tests/unit/test_webhook_channel.py — signature binds ts+body (constant-time verify, freshness window), ladder 5/25/125/600s observed via injected sleeper, statuses recorded per attempt, exhaustion auto-disables (re-enable manual), same bytes on every attempt.
+  - Files: src/graph_memory/channels/webhooks/{signing.py,channel.py}
+- [x] Task: SDK-thin python client + channel parity e2e
+  - Verify: tests/integration/test_channel_parity.py — one provider, three real HTTP surfaces: MCP get_context structured payload == REST body == SDK reads; SDK ingest accepted==3 flows through the ingest→projector pipeline; iter_items cursor walk == payload items; prefetch idempotency replay.
+  - Files: src/graph_memory/channels/sdk.py
+- [x] Task: `tenancy` registry + quotas + two-phase offboarding + 7k onboarding bench
+  - Verify: tests/unit/test_tenancy.py — onboarding idempotent metadata-only (7k bench under 10s, no per-tenant DDL), lifecycle law (revoke precedes purge; post-purge terminal), token-bucket lanes per (tenant, lane): whale burst cannot starve co-tenants.
+  - Files: src/graph_memory/tenancy/{registry.py,quotas.py,errors.py}
+- [x] Task: tenant guard injected predicate hardening (mismatch = fail closed)
+  - Verify: RegistryAwareGuard wraps any TenantGuard: unknown → TenantNotFound, revoked → instant deny (phase-1 offboarding IS this branch), suspended → deny; resumed states re-admit. Wired via channels; stable codes → 403.
+  - Files: src/graph_memory/tenancy/guard.py (RegistryAwareGuard added; StaticBearerGuard preserved)
+- [x] Task: broker adapters Kafka/Pulsar/NATS via conformance kit
+  - Verify: tests/unit/test_broker_conformance.py — kit fixtures through honest drain paths (duck-typed consumers, kit stamping rules pinned to outgoing_attributes), per-user order preserved with 2 mid-stream duplicates absorbed + poison `{"not json"` recorded not dropped (service: malformed JSON frames are poison, never 500s).
+  - Files: src/graph_memory/signals/brokers/{base.py,kafka.py,pulsar.py,nats.py}
+- [x] Task: SLA bench in CI (synthetic profile, p99 ≤1s)
+  - Verify: tests/unit/test_bench.py + `platform bench hotpath --p99-budget 1s` (exit 1 on regression): p99 ≈1ms on the in-memory profile (concurrent lanes), tiny budget flips red; budget parser (1s/500ms/plain).
+  - Files: src/graph_memory/ops/{bench.py,cli.py}
 
 ## M3 — loop & proof
 
