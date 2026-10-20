@@ -18,10 +18,10 @@ session; each lands green with its acceptance test. Pr/local only until push
   - Acceptance: ports are Protocols with zero IO imports; loop-safe scrub unit-tested; mypy strict clean
   - Verify: `uv run pytest tests/unit/test_core.py` (43 tests green)
   - Files: src/graph_memory/core/{types,errors,clock,logsafe,ports}.py + __init__, tests/unit/test_core.py
-- [ ] Task: `signals/` CloudEvents envelope model + validation
+- [x] Task: `signals/` CloudEvents envelope model + validation
   - Acceptance: pydantic model rejects missing required attrs, enforces `dataschema` URI + `partitionkey` guidance; version constant pinned to 1.0.2
-  - Verify: `uv run pytest tests/unit/test_envelope.py`
-  - Files: src/graph_memory/signals/envelope.py, tests/unit/test_envelope.py
+  - Verify: `uv run pytest tests/unit/test_envelope.py` (34 envelope tests green)
+  - Files: src/graph_memory/signals/{envelope.py,__init__.py}, tests/unit/test_envelope.py
 - [ ] Task: ledger schema + DDL/SQL engine port (`LedgerRepository`) with chdb-backed adapter
   - Acceptance: `signals_events` DDL matches SPEC §6 (ORDER BY, time-only partitions, dedup identity); insert + dedup-by-(tenant,user,type,ts,event_key) proven against embedded CH
   - Verify: `uv run pytest tests/integration/test_ledger.py` (embedded)
