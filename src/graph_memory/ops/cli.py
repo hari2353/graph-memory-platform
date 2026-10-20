@@ -1,6 +1,8 @@
-"""Ops CLI: ``platform replay ...`` — the ledger replay toolbelt."""
+"""Ops CLI: ``platform replay ...`` + ``platform bench ...`` gates."""
 
 from __future__ import annotations
+
+import asyncio
 
 import click
 
@@ -63,3 +65,24 @@ def replay(dry_run: bool, tenant_filter: str | None, backend: str) -> None:
 def main() -> None:
     """Console entry point (pyproject [project.scripts])."""
     cli()
+
+
+@cli.group()
+def bench() -> None:
+    """Performance gates on the synthetic profile (SPEC §7/§12)."""
+
+
+@bench.command("hotpath")
+@click.option("--requests", default=1000, show_default=True, help="requests per lane")
+@click.option("--users", default=30, show_default=True)
+@click.option("--p99-budget", default="1s", show_default=True, help="e.g. 1s, 500ms")
+def hotpath(requests: int, users: int, p99_budget: str) -> None:
+    """Hot-path SLA gate: context get() p99 vs the budget (exit 1 on miss)."""
+    from graph_memory.ops.bench import parse_budget, run_hotpath_bench
+
+    report = asyncio.run(
+        run_hotpath_bench(users=users, requests=requests, budget_ms=parse_budget(p99_budget))
+    )
+    click.echo(report.render())
+    if not report.passed:
+        raise SystemExit(1)
