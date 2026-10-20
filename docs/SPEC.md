@@ -123,7 +123,7 @@ modifying.
 
 | Module | Bible-level contract |
 |---|---|
-| `signals` | CloudEvents 1.0.2 envelope, `partitionkey=user_key`; HTTP `POST /v1/signals:batch` (idempotency by `source+id`); broker adapters in M2 (Kafka, Pulsar, NATS) map per-user ordering via key; ledger dedup is the correctness owner (broker dedup is best-effort [02]); DLQ per route, bounded redelivery; at-least-once in, at-most-once-effect visible |
+| `signals` | CloudEvents 1.0.2 envelope, `partitionkey=user_key`; HTTP `POST /v1/signals:batch` (idempotency by `source+id`); broker adapters via a conformance-kitted SPI — Kafka, Pulsar, NATS at M2; SNS/SQS (SNS FIFO → SQS), Azure Service Bus, Google Pub/Sub, Kinesis, Redis Streams as drop-in follow-ups; ledger dedup is the correctness owner (broker dedup is best-effort [02]); DLQ per route, bounded redelivery; at-least-once in, at-most-once-effect visible |
 | `tenancy` | Shared storage: `tenant_id` in primary keys, **time-only partitions** (never tenant partitions [03]); tenant registry rows + quota rows (quota keyed `tenant_id` on one service user; `queries_per_normalized_hash` flood control); two-phase offboarding (revoke → async purge w/ audit window); tenant-class tier map (≤5 replica-set classes) |
 | `memory-mapping` | Versioned YAML: `signals → entities/edges/upserts`, weights, decay curves, ttl hints; compiled to deterministic SQL; additive-only evolution (v2 may not reinterpret v1 payloads); compiled artifact replayable against any ledger retention window |
 | `projector` | Incremental projection per signal batch + full replay command; reflection jobs (decay tick, similarity edges, community recompute) scheduled by sim-friendly Clock; maintains `profile_snapshots` + `user_adjacency_rollup` (the read model) and staleness metadata |
@@ -375,19 +375,23 @@ Cypher, ever); log-safe scrubbing for any operator-controlled name
   replay + reflection, `context-service` + snapshots/rollups; replay
   convergence test green.
 - **M2 — surfaces:** MCP server (stateless) + REST + webhook + SDK-thin,
-  tenancy guard + quotas + onboarding CLI; SLA bench in CI.
+  tenancy guard + quotas + onboarding CLI, broker adapters (Kafka, Pulsar,
+  NATS) through the conformance kit; SLA bench in CI.
 - **M3 — loop & proof:** effectiveness-loop + eval harness + reference
   workload divergence assertion + cost/tenancy gates; demo POC repo
   (Pulsar + AI-generated signals) built against the M3 platform.
 
-## 20. Open questions (answer before module specs)
+## 20. Open questions — RESOLVED (2026-10-20, human review)
 
-1. Broker adapters in M2 exactly: Kafka + Pulsar confirmed — is NATS in or out?
-2. Whale-class tiering: virtual (one cluster, classes in routing map) for v1 —
-   confirm, or reserve dedicated clusters out of the box?
-3. Loop-2 observer: ship a scripted (heuristic) observer stub with the port, or
-   wait for a Langfuse key/LLM budget decision?
-4. Repo privacy now: push the platform public at M0, or private until M3?
+1. Broker adapters: **all** — Kafka + Pulsar + NATS at M2; SNS/SQS, Azure
+   Service Bus, Google Pub/Sub, Kinesis, Redis Streams become drop-in adapters
+   via the conformance-kitted SPI afterwards (kit = ordered-envelope, dedup,
+   replay, DLQ, backpressure scenarios every adapter must pass).
+2. Whale-class tiering: **virtual first** — one cluster, class→replica-set map
+   in routing config; dedicated clusters are a deploy-time option (ask first).
+3. Loop-2 observer: ships at M3 as a **scripted heuristic stub** behind the
+   `LlmObserver` port; LLM-backed observer is an adapter once an API budget exists.
+4. Repo visibility: **public at M0** on GitHub (`hari2353/graph-memory-platform`).
 
 ---
 
