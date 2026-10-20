@@ -102,7 +102,9 @@ async def test_exhaustion_auto_disables_the_endpoint() -> None:
     assert not report.delivered and report.disabled
     assert report.statuses == ("500", "500", "500", "500", "500")
     assert channel._registry.get("wh-d") is not None  # noqa: SLF001
-    assert channel._registry.get("wh-d").enabled is False  # noqa: SLF001  # type: ignore[union-attr]
+    wh_d = channel._registry.get("wh-d")  # noqa: SLF001
+    assert wh_d is not None
+    assert wh_d.enabled is False
     assert sleeper.delays == [
         pytest.approx(5.0),
         pytest.approx(25.0),
