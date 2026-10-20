@@ -167,6 +167,19 @@ def test_empty_append_is_a_clean_noop(ledger: LedgerRepository) -> None:
     assert ledger.read_events(T_ACME) == []
 
 
+def test_tenant_sweep_lists_every_tenant(ledger: LedgerRepository) -> None:
+    ledger.ensure_schema()
+    ledger.append(
+        [
+            _record("acme", _envelope("a")),
+            _record("acme", _envelope("b", ms=124)),
+            _record("other", _envelope("a")),
+            _record("other", _envelope("c", ms=125)),
+        ]
+    )
+    assert ledger.tenants() == [T_ACME, TenantId("other")]
+
+
 def test_clickhouse_schema_creates_ledger_and_dlq() -> None:
     settings = Settings()
     if not _ch_available(settings):

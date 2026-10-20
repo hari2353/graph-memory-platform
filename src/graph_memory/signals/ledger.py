@@ -96,6 +96,7 @@ class LedgerRepository(Protocol):
     def ensure_schema(self) -> None: ...
     def append(self, records: Sequence[LedgerRecord]) -> IngestResult: ...
     def existing_keys(self, tenant: TenantId, keys: Sequence[str]) -> set[str]: ...
+    def tenants(self) -> list[TenantId]: ...
     def read_events(
         self,
         tenant: TenantId,
@@ -110,7 +111,7 @@ class InMemoryLedger:
     """Deterministic conformance backend — identical semantics, zero IO."""
 
     def __init__(self) -> None:
-        self._rows: dict[tuple[str, str], LedgerRecord] = {}
+        self._rows: dict[tuple[TenantId, str], LedgerRecord] = {}
 
     def ensure_schema(self) -> None:
         return None
@@ -122,9 +123,9 @@ class InMemoryLedger:
         return IngestResult(accepted=accepted, duplicates=duplicates)
 
     def _collapse(
-        self, records: Sequence[LedgerRecord], existing: dict[tuple[str, str], LedgerRecord]
-    ) -> tuple[int, int, dict[tuple[str, str], LedgerRecord]]:
-        batch: dict[tuple[str, str], LedgerRecord] = {}
+        self, records: Sequence[LedgerRecord], existing: dict[tuple[TenantId, str], LedgerRecord]
+    ) -> tuple[int, int, dict[tuple[TenantId, str], LedgerRecord]]:
+        batch: dict[tuple[TenantId, str], LedgerRecord] = {}
         duplicates = 0
         for record in records:
             key = (record.tenant, record.dedup_key)
@@ -137,6 +138,9 @@ class InMemoryLedger:
     def existing_keys(self, tenant: TenantId, keys: Sequence[str]) -> set[str]:
         wanted = set(keys)
         return {key for (t, key) in self._rows if t == tenant and key in wanted}
+
+    def tenants(self) -> list[TenantId]:
+        return sorted({tenant for (tenant, _) in self._rows})
 
     def read_events(
         self,
@@ -226,10 +230,17 @@ class ClickHouseLedger:
         )
         return {str(row[0]) for row in result.result_rows}
 
+    def tenants(self) -> list[TenantId]:
+        result = self._client.query(
+            f"SELECT DISTINCT tenant_id FROM {self._database}.{self._signals_table} "
+            "ORDER BY tenant_id ASC"
+        )
+        return [TenantId(str(row[0])) for row in result.result_rows]
+
     def append(self, records: Sequence[LedgerRecord]) -> IngestResult:
         if not records:
             return IngestResult(accepted=0, duplicates=0)
-        awaiting: dict[tuple[str, str], LedgerRecord] = {}
+        awaiting: dict[tuple[TenantId, str], LedgerRecord] = {}
         duplicates = 0
         for record in records:
             key = (record.tenant, record.dedup_key)

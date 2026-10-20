@@ -31,10 +31,11 @@ session; each lands green with its acceptance test. Pr/local only until push
   - Acceptance: batch ≤10k events; duplicate batch replay inserts nothing new; poison events land in DLQ with reason; per-tenant quota hook exists (no enforcement depth yet)
   - Verify: `uv run pytest tests/integration/test_ingest_http.py` — 8 edge tests (accepted/replay-dup, per-item rejection + DLQ, oversized-payload bounded DLQ, cross-tenant claim rejection, whole-batch 429, 401/403, healthz)
   - Files: src/graph_memory/signals/{service.py,api.py}, src/graph_memory/tenancy/{guard.py,__init__.py}, tests/integration/test_ingest_http.py
-- [ ] Task: replay dry-run CLI + first contract test for broker SPI (fixture envelopes)
+- [x] Task: replay dry-run CLI + first contract test for broker SPI (fixture envelopes)
   - Acceptance: `platform replay --dry-run` prints a read-only plan; SPI kit fixture suite runs for the HTTP adapter
-  - Verify: `uv run platform replay --dry-run`; `uv run pytest tests/unit/test_spi_kit.py`
-  - Files: src/graph_memory/ops/cli.py, tests/unit/test_spi_kit.py
+  - Verify: `uv run platform replay --dry-run` (verified locally); `uv run pytest tests/unit/test_spi_kit.py` (6 tests)
+  - Files: src/graph_memory/ops/{cli.py,__init__.py}, src/graph_memory/spikit/__init__.py, tests/unit/test_spi_kit.py
+  - Notes: `tenants()` added to LedgerRepository for the sweep; console script `platform` wired in pyproject.
 - [ ] Task: publish public GitHub repo + push M0
   - Acceptance: origin = public `hari2353/graph-memory-platform`; CI green on GitHub
   - Verify: `gh repo view --json visibility` + first Actions run green

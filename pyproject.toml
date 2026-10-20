@@ -53,3 +53,6 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-name = "graph_memory"
+
+[project.scripts]
+platform = "graph_memory.ops.cli:main"
