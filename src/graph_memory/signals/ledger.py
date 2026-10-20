@@ -24,6 +24,7 @@ from typing import Protocol
 
 from clickhouse_connect.driver.client import Client
 
+from graph_memory.chclient import bind_thread_local
 from graph_memory.core.types import IngestResult, SignalType, TenantId, UserKey
 from graph_memory.settings import Settings
 from graph_memory.signals.envelope import Envelope
@@ -208,22 +209,27 @@ class ClickHouseLedger:
         self._database = database or settings.clickhouse_database
         self._signals_table = signals_table or settings.signals_table
         self._dlq_table = dlq_table or settings.dlq_table
-        self._client = client_factory(settings)
+        self._settings = settings
+        self._client_factory = bind_thread_local(client_factory)
+
+    def _client(self) -> Client:
+        """The calling thread's client (one HTTP session per thread)."""
+        return self._client_factory(self._settings)
 
     @property
     def client(self) -> Client:
-        """Direct client escape hatch — used only by ops/epochs, never by core."""
-        return self._client
+        """Direct client escape hatch - used only by ops/epochs, never by core."""
+        return self._client()
 
     def ensure_schema(self) -> None:
         for statement in build_ddl(self._database, self._signals_table, self._dlq_table):
-            self._client.command(statement)
+            self._client().command(statement)
 
     def existing_keys(self, tenant: TenantId, keys: Sequence[str]) -> set[str]:
         if not keys:
             return set()
         unique = sorted(set(keys))
-        result = self._client.query(
+        result = self._client().query(
             f"SELECT DISTINCT dedup_key FROM {self._database}.{self._signals_table} "
             "WHERE tenant_id = {tenant:String} AND dedup_key IN {keys:Array(String)}",
             parameters={"tenant": str(tenant), "keys": unique},
@@ -231,7 +237,7 @@ class ClickHouseLedger:
         return {str(row[0]) for row in result.result_rows}
 
     def tenants(self) -> list[TenantId]:
-        result = self._client.query(
+        result = self._client().query(
             f"SELECT DISTINCT tenant_id FROM {self._database}.{self._signals_table} "
             "ORDER BY tenant_id ASC"
         )
@@ -263,7 +269,7 @@ class ClickHouseLedger:
         handled = len(awaiting) - len(fresh)
         if fresh:
             rows = [record.row() for record in fresh]
-            self._client.insert(
+            self._client().insert(
                 f"{self._database}.{self._signals_table}",
                 rows,
                 column_names=list(_LEDGER_COLUMNS),
@@ -292,12 +298,12 @@ class ClickHouseLedger:
             parameters["signal"] = str(signal)
         sql += " ORDER BY occurred_at ASC LIMIT {limit:UInt32}"
         parameters["limit"] = min(limit, 10_000)
-        result = self._client.query(sql, parameters=parameters)
+        result = self._client().query(sql, parameters=parameters)
         return [stored_row(row) for row in result.result_rows]
 
     def write_dlq(self, tenant: TenantId, payload: str, reason: str) -> None:
         """Poison events land here; the DLQ row TTLs out at 180 days."""
-        self._client.insert(
+        self._client().insert(
             f"{self._database}.{self._dlq_table}",
             [(str(tenant), payload, reason, 1)],
             column_names=["tenant_id", "payload", "reason", "attempts"],

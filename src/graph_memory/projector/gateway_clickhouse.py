@@ -21,6 +21,8 @@ from datetime import UTC, datetime
 
 from clickhouse_connect.driver.client import Client
 
+from graph_memory.chclient import bind_thread_local
+from graph_memory.chclient import default_client as default_client  # re-export (live tests)
 from graph_memory.core.types import TenantId, UserKey
 from graph_memory.mapping.compiler import EdgeOp, NodeOp
 from graph_memory.projector.ddl import build_graph_ddl
@@ -29,17 +31,6 @@ from graph_memory.settings import Settings
 
 _NODES_COLUMNS = ("tenant_id", "key", "labels", "props_json")
 _EDGES_COLUMNS = ("tenant_id", "user_key", "kind", "target", "weight", "half_life_days", "valid_at")
-
-
-def default_client(settings: Settings) -> Client:
-    import clickhouse_connect
-
-    return clickhouse_connect.get_client(
-        host=settings.clickhouse_host,
-        port=settings.clickhouse_port,
-        username=settings.clickhouse_username,
-        password=settings.clickhouse_password,
-    )
 
 
 def _aware(value: object) -> datetime:
@@ -63,16 +54,21 @@ class ClickHouseGateway:
         self._database = database or settings.clickhouse_database
         self._nodes_table = nodes_table or settings.nodes_table
         self._edges_table = edges_table or settings.edges_table
-        self._client = client_factory(settings)
+        self._settings = settings
+        self._client_factory = bind_thread_local(client_factory)
+
+    def _client(self) -> Client:
+        """The calling thread's client (one HTTP session per thread)."""
+        return self._client_factory(self._settings)
 
     @property
     def client(self) -> Client:
-        """Ops escape hatch (live tests use it for cleanup)."""
-        return self._client
+        """Ops escape hatch (live tests use it for cleanup; caller's thread)."""
+        return self._client()
 
     def ensure_graph_schema(self) -> None:
         for statement in build_graph_ddl(self._database, self._nodes_table, self._edges_table):
-            self._client.command(statement)
+            self._client().command(statement)
 
     def apply(self, ops: Sequence[NodeOp | EdgeOp]) -> None:
         node_rows: list[tuple[object, ...]] = []
@@ -102,20 +98,20 @@ class ClickHouseGateway:
             else:
                 raise TypeError(f"unsupported graph op: {type(op).__name__}")
         if node_rows:
-            self._client.insert(
+            self._client().insert(
                 f"{self._database}.{self._nodes_table}",
                 node_rows,
                 column_names=list(_NODES_COLUMNS),
             )
         if edge_rows:
-            self._client.insert(
+            self._client().insert(
                 f"{self._database}.{self._edges_table}",
                 edge_rows,
                 column_names=list(_EDGES_COLUMNS),
             )
 
     def observations(self, tenant: TenantId, user: UserKey) -> list[EdgeRow]:
-        result = self._client.query(
+        result = self._client().query(
             f"SELECT tenant_id, user_key, kind, target, weight, half_life_days, valid_at "
             f"FROM {self._database}.{self._edges_table} FINAL "
             "WHERE tenant_id = {tenant:String} AND user_key = {user:String} "
@@ -138,7 +134,7 @@ class ClickHouseGateway:
     def nodes_of(self, tenant: TenantId, keys: Sequence[str]) -> list[NodeRow]:
         if not keys:
             return []
-        result = self._client.query(
+        result = self._client().query(
             f"SELECT tenant_id, key, labels, props_json "
             f"FROM {self._database}.{self._nodes_table} FINAL "
             "WHERE tenant_id = {tenant:String} AND key IN {keys:Array(String)}",
@@ -155,7 +151,7 @@ class ClickHouseGateway:
         ]
 
     def users(self, tenant: TenantId) -> list[UserKey]:
-        result = self._client.query(
+        result = self._client().query(
             f"SELECT DISTINCT user_key FROM {self._database}.{self._edges_table} FINAL "
             "WHERE tenant_id = {tenant:String} ORDER BY user_key ASC",
             parameters={"tenant": str(tenant)},
@@ -163,11 +159,11 @@ class ClickHouseGateway:
         return [UserKey(str(row[0])) for row in result.result_rows]
 
     def clear_kind(self, kind: str) -> None:
-        self._client.command(
+        self._client().command(
             f"DELETE FROM {self._database}.{self._edges_table} WHERE kind = {{kind:String}}",
             parameters={"kind": kind},
         )
 
     def replace_all(self) -> None:
-        self._client.command(f"TRUNCATE TABLE {self._database}.{self._nodes_table}")
-        self._client.command(f"TRUNCATE TABLE {self._database}.{self._edges_table}")
+        self._client().command(f"TRUNCATE TABLE {self._database}.{self._nodes_table}")
+        self._client().command(f"TRUNCATE TABLE {self._database}.{self._edges_table}")

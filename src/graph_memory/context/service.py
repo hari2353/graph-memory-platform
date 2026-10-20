@@ -67,6 +67,10 @@ class ContextCache:
         """Reflection-driven invalidation hook (projector may call this)."""
         self._entries.pop(key, None)
 
+    def clear(self) -> None:
+        """Composition-root hook: drop every entry after a re-projection."""
+        self._entries.clear()
+
 
 class MemoryContextProvider:
     """implements ``core.ports.ContextProvider`` over the projector."""

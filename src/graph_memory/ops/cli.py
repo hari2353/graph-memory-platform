@@ -1,13 +1,17 @@
-"""Ops CLI: ``platform replay ...`` + ``platform bench ...`` gates."""
+"""Ops CLI: ``platform replay|serve`` + ``platform bench`` gates."""
 
 from __future__ import annotations
 
 import asyncio
+import threading
+from typing import cast
 
 import click
 
 from graph_memory.settings import Settings
 from graph_memory.signals.ledger import ClickHouseLedger, InMemoryLedger, LedgerRepository
+
+PROJECTION_INTERVAL_S = 1.0  # serve's convergent-replay cadence
 
 
 @click.group()
@@ -111,7 +115,8 @@ def serve(mapping_path: str, host: str, ingest_port: int, rest_port: int, mcp_po
             f"replay[{tenant}]: events={digest.events} plans={digest.plans} "
             f"node_ops={digest.node_ops} edge_ops={digest.edge_ops}"
         )
-    provider = MemoryContextProvider(engine, ContextCache())
+    cache = ContextCache()
+    provider = MemoryContextProvider(engine, cache)
     capabilities = tuple(sorted(spec.capabilities))
     apps = (
         (create_ingest_app(ledger, guard, settings=settings), ingest_port, "ingest"),
@@ -135,15 +140,47 @@ def serve(mapping_path: str, host: str, ingest_port: int, rest_port: int, mcp_po
         if time.monotonic() > deadline:
             raise SystemExit("uvicorn did not start within 15s")
         time.sleep(0.1)
+    # The pipeline stage: channels never project — the composition root does.
+    # Re-run the convergent replay on an interval and drop stale cache
+    # entries, so freshly ingested signals surface within one interval.
+    projector_stop = threading.Event()
+    projector = threading.Thread(
+        target=_projection_loop, args=(engine, cache, projector_stop), daemon=True
+    )
+    projector.start()
     click.echo(f"serving: ingest :{ingest_port}  rest :{rest_port}  mcp :{mcp_port} (Ctrl+C stops)")
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
+        projector_stop.set()
+        projector.join(timeout=5)
         for server, thread in servers:
             server.should_exit = True
             thread.join(timeout=5)
         click.echo("bye")
+
+
+def _projection_loop(engine: object, cache: object, stop: threading.Event) -> None:
+    """Convergent replay every PROJECTION_INTERVAL_S; cache cleared after."""
+    import logging
+
+    from graph_memory.context.service import ContextCache
+    from graph_memory.projector.engine import Projector
+
+    logger = logging.getLogger("gmp.serve")
+    projector = cast("Projector", engine)
+    context_cache = cast("ContextCache", cache)
+    while not stop.wait(PROJECTION_INTERVAL_S):
+        # Replay is byte-convergent for the same (ledger, spec, clock): new
+        # signals get projected, everything else rewrites identical rows. A
+        # failed pass keeps serving the previous graph; retry next interval.
+        try:
+            projector.replay()
+        except Exception as exc:  # noqa: BLE001 - composition-root resilience
+            logger.error("projection pass failed; serving previous graph: %s", exc)
+        finally:
+            context_cache.clear()
 
 
 @cli.group()

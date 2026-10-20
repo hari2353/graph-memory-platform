@@ -17,9 +17,9 @@ import httpx
 import pytest
 
 _SPEC = Path(__file__).parent.parent / "fixtures" / "mapping_skill_loop.yaml"
-_INGEST_PORT = 8101
-_REST_PORT = 8102
-_MCP_PORT = 8103
+_INGEST_PORT = 8111  # distinct from the manual-demo serve ports (8101-8103)
+_REST_PORT = 8112
+_MCP_PORT = 8113
 _HEADERS = {"Authorization": "Bearer dev-acme-token"}
 
 
@@ -89,6 +89,9 @@ def test_serve_boots_ingest_rest_and_mcp() -> None:
         assert posted.status_code == 200
         assert posted.json()["accepted"] == 1
 
+        # The composition-root projection loop re-runs the convergent replay
+        # every 1s; one full interval later the context reflects the signal.
+        time.sleep(2.5)
         read = httpx.get(
             f"http://127.0.0.1:{_REST_PORT}/v1/context/user-serve/skills",
             headers=_HEADERS,
