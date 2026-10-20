@@ -166,6 +166,8 @@ def create_rest_app(provider: ContextProvider, guard: TenantGuard) -> FastAPI:
             if cursor is not None:
                 after_kind, after_target = _decode_cursor(cursor)
                 for index, (kind, item) in enumerate(ranked):
+                    if not isinstance(item, dict):
+                        continue
                     if kind == after_kind and str(item.get("target", "")) == after_target:
                         start = index + 1
                         break
