@@ -51,20 +51,26 @@ session; each lands green with its acceptance test. Pr/local only until push
   - Verify: tests/unit/test_mapping_compiler.py — deterministic double-compile equality; unmapped signal types compile to empty plan (additive-only, forward-safe)
   - Files: src/graph_memory/mapping/compiler.py
   - Notes: the compiler emits typed plans; the ClickGraph/Cypher + SQL surfaces live at the gateway tier (projector task below), keeping the compiler framework-free.
-- [ ] Task: `projector` incremental projection via ClickGraph HTTP write path
-  - Acceptance: batch of signals → expected graph rows via parameterized Cypher; tenant predicate injected on every statement
+- [x] Task: `projector` incremental projection (gateway tier)
+  - Acceptance: batch of signals → expected graph rows; tenant predicate; served by ClickGraph
+  - Verify: tests/integration/test_projector_live.py — projector writes through ClickHouseGateway (parameterized SQL, tenant predicate on every statement, ReplacingMergeTree identity = observation identity, replay-convergent server-side); ClickGraph serves the SAME state via cypher over a schema mapping of gm_nodes/gm_edges (`-m live`, real CH + real clickgraph.exe). Note: the tour-de-force here is that the compiler emits a typed plan and the gateways own the wire (SQL/Cypher stay at the adapter boundary, SPEC §14 "adapters add, core never changes").
+  - Files: src/graph_memory/projector/{engine.py,gateway.py,gateway_clickhouse.py,ddl.py}, tests/integration/test_projector_live.py
 - [x] Task: full replay + convergence test
   - Acceptance: replay from empty == live projection (zero diff) incl. shuffled-batch property test
   - Verify: tests/unit/test_projector.py — replay == incremental; permuted + duplicated delivery yields identical observation state (identity keys make order structurally irrelevant)
   - Files: src/graph_memory/projector/{engine.py,gateway.py}
-- [ ] Task: reflection ticks (decay, similarity edges) with injected Clock
+- [x] Task: reflection ticks (decay, similarity edges) with injected Clock
   - Acceptance: decay identical for same (events, spec, clock) regardless of wall-clock
+  - Verify: tests/unit/test_projector.py — decayed_score at FixedClock == pure math (snapshot ordering test); Projector.reflect() rewrites SIMILAR_TO wholesale (clear-first) in sorted user/pair order → idempotent double-reflect, symmetric edges, min-shared threshold; similarity edges live in BOTH gateways (in-memory + ClickHouse) with the same digests
+  - Files: src/graph_memory/projector/engine.py, src/graph_memory/projector/{gateway.py,gateway_clickhouse.py}
 - [x] Task: snapshot/adjacency materializers + `context-service` read model + cache
   - Acceptance: ≤3 point lookups per get(); jittered TTL + single-flight; staleness metadata present
   - Verify: tests/unit/test_context_service.py — snapshot = observations + nodes_of (2 lookups); single-flight + invalidation prove cache window; UserContext.is_stale asserts staleness contract
   - Files: src/graph_memory/context/{service.py,__init__.py}, src/graph_memory/projector/engine.py
-- [ ] Task: live-tier gate for M1 (real CH + real ClickGraph server)
+- [x] Task: live-tier gate for M1 (real CH + real ClickGraph server)
   - Acceptance: `-m live` mirrors the convergence + projection tests
+  - Verify: tests/integration/test_projector_live.py — (1) ClickHouseGateway vs InMemoryGraphGateway cross-backend zero-diff over observations AND capability snapshots through full projectors; tenant predicate isolation asserted server-side; (2) ClickGraph parity: booted clickgraph.exe against local CH, schema loaded via /schemas/load, cypher MATCH over the mapped tables returns exactly the projected HAS_SKILL edges. Both `-m live`, skipped cleanly when binaries absent.
+  - Files: tests/integration/test_projector_live.py
 
 ## M2 — surfaces
 
