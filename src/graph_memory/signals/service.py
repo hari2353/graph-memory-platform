@@ -103,9 +103,16 @@ class IngestService:
                     "payload exceeds the intake budget",
                     details={"limit": self._max_payload_bytes, "got": payload_bytes},
                 )
-            decoded: Mapping[str, object] = (
-                json.loads(raw) if isinstance(raw, str) else cast("Mapping[str, object]", raw)
-            )
+            if isinstance(raw, str):
+                try:
+                    decoded: Mapping[str, object] = json.loads(raw)
+                except ValueError as exc:  # malformed broker frames are poison
+                    raise EnvelopeError(
+                        "payload is not valid JSON",
+                        details={"reason": "malformed_json"},
+                    ) from exc
+            else:
+                decoded = cast("Mapping[str, object]", raw)
             envelope = Envelope.parse(decoded)
             claimed = envelope.tenantid
             if claimed is not None and TenantId(claimed) != self._principal.tenant:
