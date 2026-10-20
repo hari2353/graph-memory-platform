@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+
+# Local env/data
+.env
+*.local.yaml
+data/
+!data/.gitkeep
+
+# OS/editor
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/

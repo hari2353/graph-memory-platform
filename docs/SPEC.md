@@ -292,16 +292,20 @@ docs/                → RESEARCH_BRIEF, research/01..05, CAPABILITY_MAP, SPEC*,
 ```python
 class ContextProvider(Protocol):
     """Pure read model. All channels render from this; it touches nothing else."""
+
     async def get(self, principal: Principal, user: UserRef, cap: Capability) -> UserContext: ...
 
 
 class McpChannel:
     def __init__(self, provider: ContextProvider, guard: TenantGuard) -> None:
-        self._provider, self._guard = provider, guard  # dependency inversion: channels add, core never changes
+        self._provider, self._guard = (
+            provider,
+            guard,
+        )  # dependency inversion: channels add, core never changes
 
     async def get_context(self, args: GetContextArgs) -> McpResult:
         principal = self._guard.require_scope(args.oauth_token, Scope.CONTEXT_READ)
-        if principal.tenant != principal.claims_tenant:      # claims are the ONLY tenant source
+        if principal.tenant != principal.claims_tenant:  # claims are the ONLY tenant source
             raise TenantMismatch("tool arguments can never select a tenant")
         ctx = await self._provider.get(principal, args.user, args.capability)
         return to_structured_content(ctx, ttl_ms=ctx.max_age_ms, cache_scope=ctx.cache_scope)
