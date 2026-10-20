@@ -1,0 +1,36 @@
+# The reference workload's mapping spec (ITF-style skill loop).
+# mapping_version is immutable per artifact; evolution is additive (SPEC §18).
+mapping_version: 1
+signals:
+  itf.skill_assessed.v1:
+    nodes:
+      - key: "skill:{data.skill}"
+        labels: [skill]
+        props:
+          name: "{data.skill}"
+    edges:
+      - kind: HAS_SKILL
+        target: "skill:{data.skill}"
+        weight: 1.0
+        half_life_days: 180
+  itf.reco.v1:
+    edges:
+      - kind: RECOMMENDED
+        target: "skill:{data.skill}"
+        weight: 0.5
+        half_life_days: 14
+  itf.outcome.v1:
+    edges:
+      - kind: OUTCOME_IMPROVED
+        target: "skill:{data.skill}"
+        weight: 2.0
+        half_life_days: 30
+capabilities:
+  skills:
+    relations: [HAS_SKILL]
+    top_k: 5
+    ttl_ms: 60000
+  reco_effect:
+    relations: [RECOMMENDED, OUTCOME_IMPROVED]
+    top_k: 5
+    ttl_ms: 60000
