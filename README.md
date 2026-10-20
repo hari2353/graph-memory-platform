@@ -8,8 +8,11 @@ project them into a per-user memory graph served by
 and agents consume **hyperpersonalized context** through pluggable outputs
 (primary: MCP; plus REST API / webhooks / SDKs).
 
-Status: **research phase** → then the spec (`docs/SPEC.md`, the single source of
-truth) → then implementation.
+Status: **spec approved** ([docs/CAPABILITY_MAP.md](docs/CAPABILITY_MAP.md) +
+[docs/SPEC.md](docs/SPEC.md)) → implementation in progress. Research basis in
+[docs/research/](docs/research/). Plan & task tracking in
+[tasks/plan.md](tasks/plan.md) / [tasks/todo.md](tasks/todo.md).
+Current milestone: **M0 — kernel skeleton**.
 
 ## Hard requirements (recorded 2026-10-20)
 
