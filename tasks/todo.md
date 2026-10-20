@@ -22,10 +22,11 @@ session; each lands green with its acceptance test. Pr/local only until push
   - Acceptance: pydantic model rejects missing required attrs, enforces `dataschema` URI + `partitionkey` guidance; version constant pinned to 1.0.2
   - Verify: `uv run pytest tests/unit/test_envelope.py` (34 envelope tests green)
   - Files: src/graph_memory/signals/{envelope.py,__init__.py}, tests/unit/test_envelope.py
-- [ ] Task: ledger schema + DDL/SQL engine port (`LedgerRepository`) with chdb-backed adapter
+- [x] Task: ledger schema + DDL/SQL engine port (`LedgerRepository`) with chdb-backed adapter
   - Acceptance: `signals_events` DDL matches SPEC §6 (ORDER BY, time-only partitions, dedup identity); insert + dedup-by-(tenant,user,type,ts,event_key) proven against embedded CH
-  - Verify: `uv run pytest tests/integration/test_ledger.py` (embedded)
-  - Files: src/graph_memory/signals/ledger.py, src/graph_memory/signals/sql/ddl.py, tests/integration/test_ledger.py
+  - Verify: `uv run pytest tests/integration/test_ledger.py` — one suite, two backends: InMemory (always) + ClickHouseLedger against live local CH (:8124), all green
+  - Files: src/graph_memory/signals/{ledger.py,sql/ddl.py}, src/graph_memory/settings.py, tests/integration/test_ledger.py
+  - Notes: chdb is unavailable on Windows, so the adapter is ClickHouse-server based locally and chdb remains the CI/dev-embedded extra (`embedded` optional dep). Projections omission: CH build rejects ReplacingMergeTree projections (deduplicate_merge_projection_mode=throw) — dedup owner is ReplacingMergeTree ORDER BY + FINAL reads.
 - [ ] Task: HTTP ingest `POST /v1/signals:batch` (FastAPI) + idempotency + DLQ table
   - Acceptance: batch ≤10k events; duplicate batch replay inserts nothing new; poison events land in DLQ with reason; per-tenant quota hook exists (no enforcement depth yet)
   - Verify: `uv run pytest tests/integration/test_ingest_http.py`
