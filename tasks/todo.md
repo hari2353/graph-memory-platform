@@ -14,10 +14,10 @@ session; each lands green with its acceptance test. Pr/local only until push
   - Acceptance: `uv run ruff check . && uv run mypy --strict . && uv run pytest` all green on empty package; GitHub Actions workflow runs the same on push
   - Verify: commands pass locally; workflow file committed
   - Files: pyproject.toml, .python-version, .gitignore, .github/workflows/ci.yml, src/graph_memory/__init__.py
-- [ ] Task: `core/` ports + domain foundation (Principal, TenantGuard contract, Clock, SignalSink, ContextProvider protocol, errors, log-safe scrub)
+- [x] Task: `core/` ports + domain foundation (Principal, TenantGuard contract, Clock, SignalSink, ContextProvider protocol, errors, log-safe scrub)
   - Acceptance: ports are Protocols with zero IO imports; loop-safe scrub unit-tested; mypy strict clean
-  - Verify: `uv run pytest tests/unit/test_core.py`
-  - Files: src/graph_memory/core/{types,errors,clock,logsafe}.py, tests/unit/test_core.py
+  - Verify: `uv run pytest tests/unit/test_core.py` (43 tests green)
+  - Files: src/graph_memory/core/{types,errors,clock,logsafe,ports}.py + __init__, tests/unit/test_core.py
 - [ ] Task: `signals/` CloudEvents envelope model + validation
   - Acceptance: pydantic model rejects missing required attrs, enforces `dataschema` URI + `partitionkey` guidance; version constant pinned to 1.0.2
   - Verify: `uv run pytest tests/unit/test_envelope.py`
