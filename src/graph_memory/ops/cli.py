@@ -67,6 +67,85 @@ def main() -> None:
     cli()
 
 
+@cli.command()
+@click.option("--mapping", "mapping_path", required=True, help="mapping spec YAML path")
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--ingest-port", default=8001, show_default=True)
+@click.option("--rest-port", default=8002, show_default=True)
+@click.option("--mcp-port", default=8003, show_default=True)
+def serve(mapping_path: str, host: str, ingest_port: int, rest_port: int, mcp_port: int) -> None:
+    """Boot ingest + REST + MCP against the live ClickHouse tier.
+
+    Boot replays the ledger first (the M1 convergence proof, as warmup), so
+    every channel serves the deterministic projection of everything the
+    ledger holds. Dev posture: the static bearer tokens from Settings.
+    """
+    import threading
+    import time
+    from pathlib import Path
+
+    import uvicorn
+
+    from graph_memory.channels.mcp.server import build_mcp_server, mcp_streamable_app
+    from graph_memory.channels.rest.api import create_rest_app
+    from graph_memory.context.service import ContextCache, MemoryContextProvider
+    from graph_memory.core.clock import SystemClock
+    from graph_memory.mapping.spec import load_spec
+    from graph_memory.projector.engine import Projector
+    from graph_memory.projector.gateway_clickhouse import ClickHouseGateway
+    from graph_memory.signals.api import create_app as create_ingest_app
+    from graph_memory.signals.ledger import ClickHouseLedger
+    from graph_memory.tenancy.guard import StaticBearerGuard
+
+    settings = Settings()
+    ledger = ClickHouseLedger(settings)
+    ledger.ensure_schema()
+    gateway = ClickHouseGateway(settings)
+    gateway.ensure_graph_schema()
+    spec = load_spec(Path(mapping_path).read_text(encoding="utf-8"))
+    guard = StaticBearerGuard(settings.dev_static_tokens)
+    engine = Projector(spec, ledger, gateway, SystemClock())
+    digests = engine.replay()
+    for tenant, digest in sorted(digests.items()):
+        click.echo(
+            f"replay[{tenant}]: events={digest.events} plans={digest.plans} "
+            f"node_ops={digest.node_ops} edge_ops={digest.edge_ops}"
+        )
+    provider = MemoryContextProvider(engine, ContextCache())
+    capabilities = tuple(sorted(spec.capabilities))
+    apps = (
+        (create_ingest_app(ledger, guard, settings=settings), ingest_port, "ingest"),
+        (create_rest_app(provider, guard), rest_port, "rest"),
+        (
+            mcp_streamable_app(
+                build_mcp_server(provider, guard, capabilities=capabilities, signal_schemas={})
+            ),
+            mcp_port,
+            "mcp",
+        ),
+    )
+    servers: list[tuple[uvicorn.Server, threading.Thread]] = []
+    for app, port, _label in apps:
+        server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        servers.append((server, thread))
+    deadline = time.monotonic() + 15
+    while any(not server.started for server, _ in servers):
+        if time.monotonic() > deadline:
+            raise SystemExit("uvicorn did not start within 15s")
+        time.sleep(0.1)
+    click.echo(f"serving: ingest :{ingest_port}  rest :{rest_port}  mcp :{mcp_port} (Ctrl+C stops)")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        for server, thread in servers:
+            server.should_exit = True
+            thread.join(timeout=5)
+        click.echo("bye")
+
+
 @cli.group()
 def bench() -> None:
     """Performance gates on the synthetic profile (SPEC §7/§12)."""
@@ -100,3 +179,7 @@ def cost(events_per_day: int, months: int, codec_ratio: float) -> None:
     click.echo(report.render())
     if not within_budget(report):
         raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()  # python -m graph_memory.ops.cli serve --mapping config/mapping.yaml

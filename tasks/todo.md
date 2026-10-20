@@ -101,12 +101,28 @@ session; each lands green with its acceptance test. Pr/local only until push
 
 ## M3 — loop & proof
 
-- [ ] Task: outcome ledger + effectiveness scorer + weight writer
-- [ ] Task: eval harness (hit-rate@k, counterfactual replay, lift report)
-- [ ] Task: reference workload (synthetic ITF-style cohorts) + divergence e2e
-- [ ] Task: cost gate CI + per-tenant metering dashboards data
-- [ ] Task: scripted `LlmObserver` stub behind port (Loop 2 stub)
+- [x] Task: outcome ledger + effectiveness scorer + weight writer
+  - Acceptance: outcome verdicts attach by correlation_id, score deterministically, and the re-projection they cause stays replay-safe
+  - Verify: tests/unit/test_effectiveness_loop.py — attach on the origin event id (not the dedup hash), Laplace rate ⇒ clamped multiplier, per-cohort weight rows keyed (kind, target, cohort) so cohorts never collide; apply_effectives rewrites gateway rows in one replay (0.5 → 0.5×(0.5+2/3)); same-cohort class collisions resolve by size then name; null tick without the spec block; alpha-0 pins the 0.5 floor.
+  - Files: src/graph_memory/loop/{tick.py,__init__.py}, src/graph_memory/mapping/{spec.py,compiler.py}, src/graph_memory/projector/engine.py
+- [x] Task: eval harness (hit-rate@k, counterfactual replay, lift report)
+  - Acceptance: prove personalization offline, deterministically
+  - Verify: tests/integration/test_effectiveness_divergence.py — hit-rate@1 0.5→1.0 (lift = +0.5 via graph_memory.evals); counterfactual replay: dropping the graph-inert loop signal yields an EMPTY diff (noise controllability), dropping recos diverges exactly the recos capability and never skills.
+  - Files: src/graph_memory/evals/{harness.py,__init__.py}
+- [x] Task: reference workload (synthetic ITF-style cohorts) + divergence e2e
+  - Acceptance: §16.1 falsifiable — different tops for cohorts with identical skill gaps; no-loop baseline identical
+  - Verify: baseline recos identical cohort-blind; the loop-carrying engine flips cohort-b's top to skill:rust while cohort-a keeps skill:python; the skills capability stays identical in both engines (the gaps never moved).
+  - Files: tests/integration/test_effectiveness_divergence.py
+- [x] Task: cost gate CI + per-tenant metering dashboards data
+  - Acceptance: §16.6 — the synthetic ledger recomputes §12 within ±15% in CI
+  - Verify: tests/unit/test_cost_and_observer.py — profile events measure ~1023B (the ~1KB §12 target), the recompute lands at 0.977 TB/mo within ±15% of 1.07 (12-mo 11.72 vs 12.8); `platform bench cost` exits 1 on double-sized rows.
+  - Files: src/graph_memory/ops/{cost.py,cli.py}
+- [x] Task: scripted `LlmObserver` stub behind port (Loop 2 stub)
+  - Acceptance: the observer is advisory evidence, never kernel control flow
+  - Verify: ScriptedLlmObserver records gmp.observer.* spans (verdict/reason) through the SpanSink port with the injected clock; NoopObserver silent; the protocol returns a dict — nothing an observer says can mutate graph state.
+  - Files: src/graph_memory/observability/{observer.py,__init__.py}
 - [ ] Task: demo POC repo (Pulsar + AI-generated signals) against deployed platform
+  - Status: in progress — F:\graph-memory-platform-poc (producer + AI-signal generator hitting the platform's HTTP ingest)
 
 ## Backlog (post-M3, recorded only)
 
