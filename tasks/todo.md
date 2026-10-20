@@ -27,10 +27,10 @@ session; each lands green with its acceptance test. Pr/local only until push
   - Verify: `uv run pytest tests/integration/test_ledger.py` — one suite, two backends: InMemory (always) + ClickHouseLedger against live local CH (:8124), all green
   - Files: src/graph_memory/signals/{ledger.py,sql/ddl.py}, src/graph_memory/settings.py, tests/integration/test_ledger.py
   - Notes: chdb is unavailable on Windows, so the adapter is ClickHouse-server based locally and chdb remains the CI/dev-embedded extra (`embedded` optional dep). Projections omission: CH build rejects ReplacingMergeTree projections (deduplicate_merge_projection_mode=throw) — dedup owner is ReplacingMergeTree ORDER BY + FINAL reads.
-- [ ] Task: HTTP ingest `POST /v1/signals:batch` (FastAPI) + idempotency + DLQ table
+- [x] Task: HTTP ingest `POST /v1/signals:batch` (FastAPI) + idempotency + DLQ table
   - Acceptance: batch ≤10k events; duplicate batch replay inserts nothing new; poison events land in DLQ with reason; per-tenant quota hook exists (no enforcement depth yet)
-  - Verify: `uv run pytest tests/integration/test_ingest_http.py`
-  - Files: src/graph_memory/signals/api.py, src/graph_memory/signals/service.py, tests/integration/test_ingest_http.py
+  - Verify: `uv run pytest tests/integration/test_ingest_http.py` — 8 edge tests (accepted/replay-dup, per-item rejection + DLQ, oversized-payload bounded DLQ, cross-tenant claim rejection, whole-batch 429, 401/403, healthz)
+  - Files: src/graph_memory/signals/{service.py,api.py}, src/graph_memory/tenancy/{guard.py,__init__.py}, tests/integration/test_ingest_http.py
 - [ ] Task: replay dry-run CLI + first contract test for broker SPI (fixture envelopes)
   - Acceptance: `platform replay --dry-run` prints a read-only plan; SPI kit fixture suite runs for the HTTP adapter
   - Verify: `uv run platform replay --dry-run`; `uv run pytest tests/unit/test_spi_kit.py`

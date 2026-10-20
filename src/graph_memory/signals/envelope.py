@@ -14,6 +14,7 @@ Conventions (SPEC §5, §18; research 02):
 """
 
 import hashlib
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -128,7 +129,7 @@ class Envelope(BaseModel):
         return dict(extra)
 
     @classmethod
-    def parse(cls, payload: dict[str, object]) -> "Envelope":
+    def parse(cls, payload: Mapping[str, object]) -> "Envelope":
         """Validate raw decoded JSON; raise ``EnvelopeError`` (never pydantic's)."""
         try:
             return cls.model_validate(payload)

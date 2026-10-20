@@ -25,3 +25,8 @@ class Settings(BaseSettings):
 
     max_batch_events: int = 10_000
     max_payload_bytes: int = 65_536  # CloudEvents' 64 KiB intermediary guidance
+
+    dev_static_tokens: dict[str, str] = {
+        "dev-acme-token": "acme",
+        "dev-other-token": "other",
+    }

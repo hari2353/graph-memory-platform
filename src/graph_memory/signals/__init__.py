@@ -10,15 +10,20 @@ from graph_memory.signals.ledger import (
     record_from_envelope,
     stored_row,
 )
+from graph_memory.signals.service import BatchOutcome, IngestService, NullPoisonSink, PoisonSink
 
 __all__ = [
     "CLOUDEVENTS_SPECVERSION",
     "ENVELOPE_VERSION",
+    "BatchOutcome",
     "ClickHouseLedger",
     "Envelope",
+    "IngestService",
     "InMemoryLedger",
     "LedgerRecord",
     "LedgerRepository",
+    "NullPoisonSink",
+    "PoisonSink",
     "StoredEvent",
     "record_from_envelope",
     "stored_row",
