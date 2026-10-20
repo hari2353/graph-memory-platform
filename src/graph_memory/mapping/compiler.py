@@ -54,20 +54,31 @@ class ProjectionPlan:
 
 
 def compile_plan(spec: MappingSpec, tenant: TenantId, envelope: Envelope) -> ProjectionPlan:
-    """Compile one validated envelope into its projection plan."""
+    """Compile one validated envelope into its projection plan.
+
+    Every mapped event also upserts the USER node (keyed by the raw user key,
+    label ``user``) — edge endpoints must exist for the graph to serve cypher
+    matches without dangling references.
+    """
     context = envelope_context(envelope)
     user = UserKey(str(context["partitionkey"]))
     rule = spec.signals.get(envelope.type)
     if rule is None:
         return ProjectionPlan(tenant=tenant, signal=envelope.type, nodes=(), edges=())
-    nodes = tuple(
-        NodeOp(
-            tenant=tenant,
-            key=resolve_template(node.key, context),
-            labels=node.labels,
-            props={name: resolve_template(value, context) for name, value in node.props.items()},
-        )
-        for node in rule.nodes
+    user_node = NodeOp(tenant=tenant, key=str(user), labels=("user",), props={"name": str(user)})
+    nodes = (
+        user_node,
+        *(
+            NodeOp(
+                tenant=tenant,
+                key=resolve_template(node.key, context),
+                labels=node.labels,
+                props={
+                    name: resolve_template(value, context) for name, value in node.props.items()
+                },
+            )
+            for node in rule.nodes
+        ),
     )
     edges = tuple(
         EdgeOp(

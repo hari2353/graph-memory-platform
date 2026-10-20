@@ -49,6 +49,10 @@ class GraphGateway(Protocol):
 
     def nodes_of(self, tenant: TenantId, keys: Sequence[str]) -> list[NodeRow]: ...
 
+    def users(self, tenant: TenantId) -> list[UserKey]: ...
+
+    def clear_kind(self, kind: str) -> None: ...
+
     def replace_all(self) -> None: ...
 
 
@@ -94,6 +98,14 @@ class InMemoryGraphGateway:
             for (t, key), op in self._nodes.items()
             if t == tenant and key in wanted
         ]
+
+    def users(self, tenant: TenantId) -> list[UserKey]:
+        return sorted(
+            {UserKey(user) for (t, user, _kind, _target, _at) in self._edges if t == tenant}
+        )
+
+    def clear_kind(self, kind: str) -> None:
+        self._edges = {key: op for key, op in self._edges.items() if op.kind != kind}
 
     def replace_all(self) -> None:
         self._nodes.clear()

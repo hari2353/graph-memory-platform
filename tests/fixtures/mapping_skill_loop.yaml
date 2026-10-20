@@ -34,3 +34,7 @@ capabilities:
     relations: [RECOMMENDED, OUTCOME_IMPROVED]
     top_k: 5
     ttl_ms: 60000
+  peers:
+    relations: [SIMILAR_TO]
+    top_k: 5
+    ttl_ms: 60000

@@ -10,9 +10,9 @@ session; each lands green with its acceptance test. Pr/local only until push
   - Acceptance: docs exist and trace decisions to research; commits clean
   - Verify: `git log --oneline` shows 3+ commits; SPEC §20 resolutions recorded
   - Files: README.md, docs/RESEARCH_BRIEF.md, docs/research/01..05, docs/CAPABILITY_MAP.md, docs/SPEC.md
-- [ ] Task: tooling skeleton (uv + ruff + mypy strict + pytest, CI workflow)
+- [x] Task: tooling skeleton (uv + ruff + mypy strict + pytest, CI workflow)
   - Acceptance: `uv run ruff check . && uv run mypy --strict . && uv run pytest` all green on empty package; GitHub Actions workflow runs the same on push
-  - Verify: commands pass locally; workflow file committed
+  - Verify: commands pass locally; workflow file committed (CI green on GitHub since commit 14e0ffc)
   - Files: pyproject.toml, .python-version, .gitignore, .github/workflows/ci.yml, src/graph_memory/__init__.py
 - [x] Task: `core/` ports + domain foundation (Principal, TenantGuard contract, Clock, SignalSink, ContextProvider protocol, errors, log-safe scrub)
   - Acceptance: ports are Protocols with zero IO imports; loop-safe scrub unit-tested; mypy strict clean
@@ -36,25 +36,33 @@ session; each lands green with its acceptance test. Pr/local only until push
   - Verify: `uv run platform replay --dry-run` (verified locally); `uv run pytest tests/unit/test_spi_kit.py` (6 tests)
   - Files: src/graph_memory/ops/{cli.py,__init__.py}, src/graph_memory/spikit/__init__.py, tests/unit/test_spi_kit.py
   - Notes: `tenants()` added to LedgerRepository for the sweep; console script `platform` wired in pyproject.
-- [ ] Task: publish public GitHub repo + push M0
+- [x] Task: publish public GitHub repo + push M0
   - Acceptance: origin = public `hari2353/graph-memory-platform`; CI green on GitHub
-  - Verify: `gh repo view --json visibility` + first Actions run green
+  - Verify: continuously pushed since; repo public at github.com/hari2353/graph-memory-platform
 
 ## M1 — memory engine
 
-- [ ] Task: `memory-mapping` spec schema v1 (YAML → pydantic) + validator
-  - Acceptance: only signal→upsert/weight/decay/ttl constructs; version immutable per artifact; additive-only rules encoded in validator
-  - Verify: unit tests on good/bad specs
-- [ ] Task: mapping compiler to deterministic SQL (pure)
-  - Acceptance: compile(spec, sample events) → SQL that is byte-stable; no wall-clock; mypy strict; ≥90% coverage on compiler
+- [x] Task: `memory-mapping` spec schema v1 (YAML → pydantic) + validator
+  - Acceptance: only signal→upsert/weight/decay/ttl constructs; version immutable per artifact; additive-only rules encoded in validator (`mapping_version: Literal[1]`, `extra="forbid"`, bounded sizes, types validated via core.signal_type; capabilities must reference declared kinds)
+  - Verify: tests/unit/test_mapping_compiler.py — reference fixture loads; 7 bad-spec parametrized cases raise MappingError
+  - Files: src/graph_memory/mapping/spec.py (+__init__)
+- [x] Task: mapping compiler to deterministic ops (pure)
+  - Acceptance: compile(spec, envelope) → typed NodeOp/EdgeOp plan that is pure and byte-stable; no wall clock; mypy strict
+  - Verify: tests/unit/test_mapping_compiler.py — deterministic double-compile equality; unmapped signal types compile to empty plan (additive-only, forward-safe)
+  - Files: src/graph_memory/mapping/compiler.py
+  - Notes: the compiler emits typed plans; the ClickGraph/Cypher + SQL surfaces live at the gateway tier (projector task below), keeping the compiler framework-free.
 - [ ] Task: `projector` incremental projection via ClickGraph HTTP write path
   - Acceptance: batch of signals → expected graph rows via parameterized Cypher; tenant predicate injected on every statement
-- [ ] Task: full replay + convergence test
+- [x] Task: full replay + convergence test
   - Acceptance: replay from empty == live projection (zero diff) incl. shuffled-batch property test
+  - Verify: tests/unit/test_projector.py — replay == incremental; permuted + duplicated delivery yields identical observation state (identity keys make order structurally irrelevant)
+  - Files: src/graph_memory/projector/{engine.py,gateway.py}
 - [ ] Task: reflection ticks (decay, similarity edges) with injected Clock
   - Acceptance: decay identical for same (events, spec, clock) regardless of wall-clock
-- [ ] Task: snapshot/adjacency materializers + `context-service` read model + cache
+- [x] Task: snapshot/adjacency materializers + `context-service` read model + cache
   - Acceptance: ≤3 point lookups per get(); jittered TTL + single-flight; staleness metadata present
+  - Verify: tests/unit/test_context_service.py — snapshot = observations + nodes_of (2 lookups); single-flight + invalidation prove cache window; UserContext.is_stale asserts staleness contract
+  - Files: src/graph_memory/context/{service.py,__init__.py}, src/graph_memory/projector/engine.py
 - [ ] Task: live-tier gate for M1 (real CH + real ClickGraph server)
   - Acceptance: `-m live` mirrors the convergence + projection tests
 

@@ -40,7 +40,7 @@ def _envelope(**overrides: object) -> Envelope:
 def test_reference_spec_loads() -> None:
     mapping = _spec()
     assert sorted(mapping.signals) == ["itf.outcome.v1", "itf.reco.v1", "itf.skill_assessed.v1"]
-    assert set(mapping.capabilities) == {"skills", "reco_effect"}
+    assert set(mapping.capabilities) == {"skills", "reco_effect", "peers"}
     assert mapping.mapping_version == 1
 
 
@@ -50,11 +50,12 @@ def test_compile_skill_assessed_is_deterministic() -> None:
     plan_one = compile_plan(mapping, _ACME, envelope)
     plan_two = compile_plan(mapping, _ACME, envelope)
     assert plan_one == plan_two
-    assert len(plan_one.nodes) == 1 and len(plan_one.edges) == 1
-    node = plan_one.nodes[0]
-    assert node.key == "skill:rust"
-    assert node.labels == ("skill",)
-    assert node.props == {"name": "rust"}
+    assert len(plan_one.nodes) == 2  # builtin user node + the spec's node rule
+    node_keys = {node.key for node in plan_one.nodes}
+    assert node_keys == {"user-1", "skill:rust"}
+    (skill,) = [node for node in plan_one.nodes if node.key == "skill:rust"]
+    assert skill.labels == ("skill",)
+    assert skill.props == {"name": "rust"}
     edge = plan_one.edges[0]
     assert (edge.user, edge.kind, edge.target) == ("user-1", "HAS_SKILL", "skill:rust")
     assert edge.weight == 1.0

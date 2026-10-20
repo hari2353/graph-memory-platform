@@ -53,7 +53,7 @@ def test_incremental_projection_creates_observations_and_nodes() -> None:
     engine, ledger = _engine()
     digest = engine.process_events(ledger.read_events(_T))
     assert (digest.events, digest.plans) == (5, 5)
-    assert digest.node_ops == 5  # one shared node key, upserted per event
+    assert digest.node_ops == 10  # builtin user node + the skill node, per event
     rows = engine._gateway.observations(_T, UserKey("user-1"))  # noqa: SLF001 — engine internals in-test
     assert len(rows) == 5
 
@@ -150,3 +150,89 @@ def test_unknown_capability_raises() -> None:
     engine.process_events(ledger.read_events(_T))
     with pytest.raises(CapabilityUnknown, match="not declared"):
         engine.snapshot(_T, UserKey("user-1"), Capability("nope"))
+
+
+def _seed_skills(
+    engineandledger: tuple[Projector, InMemoryLedger], *users_skills: tuple[str, str]
+) -> None:
+    engine, ledger = engineandledger
+    for index, (user, skill) in enumerate(users_skills):
+        envelope = _envelope(
+            f"s{index}",
+            user=user,
+            ms=100 + index,
+            data={"skill": skill},
+        )
+        ledger.append([record_from_envelope(_T, envelope)])
+    engine.process_events(ledger.read_events(_T))
+
+
+def test_reflection_writes_symmetric_similarity_edges() -> None:
+    engine, ledger = _engine(seed_events=0)
+    _seed_skills(
+        (engine, ledger),
+        ("user-1", "rust"),
+        ("user-1", "python"),
+        ("user-2", "rust"),
+        ("user-2", "python"),
+        ("user-3", "go"),
+    )
+    digest = engine.reflect()
+    assert (digest.users_scanned, digest.pairs_scored, digest.similar_edges_written) == (3, 3, 2)
+    sim_one = [
+        row
+        for row in engine._gateway.observations(_T, UserKey("user-1"))  # noqa: SLF001
+        if row.kind == "SIMILAR_TO"
+    ]
+    assert [row.target for row in sim_one] == ["user-2"]  # raw user keys are node ids
+    sim_three = [
+        row
+        for row in engine._gateway.observations(_T, UserKey("user-3"))  # noqa: SLF001
+        if row.kind == "SIMILAR_TO"
+    ]
+    assert sim_three == []  # user-3 shares nothing; only their HAS_SKILL remains
+
+
+def test_reflection_is_idempotent() -> None:
+    engine, ledger = _engine(seed_events=0)
+    _seed_skills(
+        (engine, ledger),
+        ("user-1", "rust"),
+        ("user-1", "python"),
+        ("user-2", "rust"),
+        ("user-2", "python"),
+    )
+    first = engine.reflect()
+    state_one = {
+        (row.user, row.kind, row.target, row.weight)
+        for row in engine._gateway.observations(_T, UserKey("user-1"))  # noqa: SLF001
+        if row.kind == "SIMILAR_TO"
+    }
+    second = engine.reflect()
+    state_two = {
+        (row.user, row.kind, row.target, row.weight)
+        for row in engine._gateway.observations(_T, UserKey("user-1"))  # noqa: SLF001
+        if row.kind == "SIMILAR_TO"
+    }
+    assert state_one == state_two
+    assert (first.similar_edges_written, second.similar_edges_written) == (2, 2)
+
+
+def test_similarity_capability_serves_peer_targets() -> None:
+    engine, ledger = _engine(seed_events=0)
+    _seed_skills(
+        (engine, ledger),
+        ("user-1", "rust"),
+        ("user-1", "python"),
+        ("user-2", "rust"),
+        ("user-2", "python"),
+    )
+    engine.reflect()
+    doc = engine.snapshot(_T, UserKey("user-1"), Capability("peers"))
+    items = doc.payload["items"]
+    assert isinstance(items, list)
+    targets = [entry["target"] for entry in items if isinstance(entry, dict)]
+    assert targets == ["user-2"]
+    labels = doc.payload["labels"]
+    assert isinstance(labels, dict)
+    assert labels["user-2"] == ["user"]

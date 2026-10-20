@@ -35,6 +35,7 @@ _KIND = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 _LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,31}$")
 _PLACEHOLDER = re.compile(r"\{([A-Za-z0-9_.]+)\}")
 _RESERVED_PLACEHOLDERS = frozenset({"partitionkey", "id", "source", "type", "time"})
+_SYSTEM_KINDS = frozenset({"SIMILAR_TO"})  # written by reflection, not by signals
 
 
 class MappingError(PlatformError):
@@ -227,6 +228,7 @@ class MappingSpec(BaseModel):
     @model_validator(mode="after")
     def _capabilities_reference_declared_kinds(self) -> Self:
         declared = {edge.kind for rule in self.signals.values() for edge in rule.edges}
+        declared |= _SYSTEM_KINDS  # reflection kinds are always consumable
         for name, capability in self.capabilities.items():
             unknown = [kind for kind in capability.relations if kind not in declared]
             if unknown:

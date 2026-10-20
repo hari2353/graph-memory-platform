@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     clickhouse_database: str = "gmp"
     signals_table: str = "signals_events"
     dlq_table: str = "signal_dlq"
+    nodes_table: str = "gm_nodes"
+    edges_table: str = "gm_edges"
 
     max_batch_events: int = 10_000
     max_payload_bytes: int = 65_536  # CloudEvents' 64 KiB intermediary guidance

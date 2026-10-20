@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import combinations
 from math import exp, log
 
 from graph_memory.core.clock import Clock
@@ -28,6 +29,9 @@ from graph_memory.projector.gateway import GraphGateway
 from graph_memory.signals.ledger import LedgerRepository, StoredEvent
 
 _LN2 = log(2.0)
+_SIMILAR_KIND = "SIMILAR_TO"
+_SIMILAR_MIN_SHARED = 2
+_SIMILAR_HALF_LIFE_DAYS = 3650.0  # similarity is cohort-level, not skill-recency
 
 
 class CapabilityUnknown(PlatformError):
@@ -55,6 +59,15 @@ class ProjectionDigest:
 
 
 @dataclass(frozen=True)
+class ReflectionDigest:
+    """Counts from one reflection tick; stable across backends."""
+
+    users_scanned: int
+    pairs_scored: int
+    similar_edges_written: int
+
+
+@dataclass(frozen=True)
 class SnapshotDoc:
     """The materialized read-model doc for one (tenant, user, capability)."""
 
@@ -72,6 +85,11 @@ def decayed_score(weight: float, half_life_days: float, valid_at: datetime, now:
     if age_days <= 0:
         return weight
     return weight * exp(-_LN2 * age_days / half_life_days)
+
+
+def _user_node(user: UserKey) -> str:
+    """User nodes are keyed by the RAW user key (edges join on this id)."""
+    return str(user)
 
 
 class Projector:
@@ -125,6 +143,71 @@ class Projector:
             plans=1,
             node_ops=len(plan.nodes),
             edge_ops=len(plan.edges),
+        )
+
+    def reflect(self, *, min_shared: int = _SIMILAR_MIN_SHARED) -> ReflectionDigest:
+        """One reflection tick: rewrite SIMILAR_TO edges from current state.
+
+        Deterministic: users and pairs are visited in sorted order, the tick
+        reads one settled observation snapshot, and the similarity set is
+        rewritten wholesale (clear-first, never incrementally patched). The
+        injected Clock stamps the tick instant.
+        """
+        users_scanned = 0
+        pairs_scored = 0
+        written = 0
+        now = self._clock.now()
+        for tenant in self._ledger.tenants():
+            self._gateway.clear_kind(_SIMILAR_KIND)
+            users = self._gateway.users(tenant)
+            users_scanned += len(users)
+            skills: dict[UserKey, set[tuple[str, str]]] = {}
+            for user in users:
+                skills[user] = {
+                    (row.kind, row.target)
+                    for row in self._gateway.observations(tenant, user)
+                    if row.kind != _SIMILAR_KIND
+                }
+            ops: list[NodeOp | EdgeOp] = []
+            for user_a, user_b in combinations(sorted(users), 2):
+                pairs_scored += 1
+                shared = len(skills[user_a] & skills[user_b])
+                if shared < min_shared:
+                    continue
+                ops.append(
+                    NodeOp(
+                        tenant=tenant,
+                        key=_user_node(user_a),
+                        labels=("user",),
+                        props={"name": user_a},
+                    )
+                )
+                ops.append(
+                    NodeOp(
+                        tenant=tenant,
+                        key=_user_node(user_b),
+                        labels=("user",),
+                        props={"name": user_b},
+                    )
+                )
+                for source, target in ((user_a, user_b), (user_b, user_a)):
+                    ops.append(
+                        EdgeOp(
+                            tenant=tenant,
+                            user=source,
+                            kind=_SIMILAR_KIND,
+                            target=_user_node(target),
+                            weight=float(shared),
+                            half_life_days=_SIMILAR_HALF_LIFE_DAYS,
+                            valid_at=now,
+                        )
+                    )
+                written += 2
+            self._gateway.apply(ops)
+        return ReflectionDigest(
+            users_scanned=users_scanned,
+            pairs_scored=pairs_scored,
+            similar_edges_written=written,
         )
 
     def snapshot(self, tenant: TenantId, user: UserKey, capability: Capability) -> SnapshotDoc:
