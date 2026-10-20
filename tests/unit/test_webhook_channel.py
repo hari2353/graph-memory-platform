@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import httpx
@@ -35,7 +36,7 @@ class _FixedClock(Clock):
         return _NOW
 
 
-def _transport(responder) -> httpx.AsyncClient:
+def _transport(responder: Callable[[httpx.Request], httpx.Response]) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(responder))
 
 
@@ -100,7 +101,8 @@ async def test_exhaustion_auto_disables_the_endpoint() -> None:
     [report] = await channel.dispatch({"event": "acted_on"})
     assert not report.delivered and report.disabled
     assert report.statuses == ("500", "500", "500", "500", "500")
-    assert channel._registry.get("wh-d").enabled is False  # noqa: SLF001
+    assert channel._registry.get("wh-d") is not None  # noqa: SLF001
+    assert channel._registry.get("wh-d").enabled is False  # noqa: SLF001  # type: ignore[union-attr]
     assert sleeper.delays == [
         pytest.approx(5.0),
         pytest.approx(25.0),
@@ -122,10 +124,12 @@ async def test_disabled_endpoint_is_skipped_and_can_be_reenabled() -> None:
     registry = WebhookRegistry()
     channel = WebhookChannel(registry, _transport(tally), clock=_FixedClock(), sleeper=_no_sleep)
     channel.register(WebhookEndpoint(id="wh-off", url="https://hooks.example.com/off", secret="s3"))
-    channel._registry.get("wh-off").enabled = False  # noqa: SLF001
+    endpoint = channel._registry.get("wh-off")  # noqa: SLF001
+    assert endpoint is not None
+    endpoint.enabled = False
     reports = await channel.dispatch({"event": "acted_on"})
     assert reports == []  # endpoint disabled → silently not targeted
-    channel._registry.get("wh-off").enabled = True  # noqa: SLF001
+    endpoint.enabled = True
     await channel.dispatch({"event": "acted_on"})
     assert len(sent) == 1
 
