@@ -148,11 +148,16 @@ class Projector:
         return digest
 
     def replay(self) -> dict[TenantId, ProjectionDigest]:
-        """Full rebuild from the ledger; the projection is replaceable."""
+        """Full rebuild from the ledger; the projection is replaceable.
+
+        The rebuild stages into the gateway's hold-out and publishes atomically
+        at the end, so serving readers never observe a half-built graph.
+        """
         self._gateway.replace_all()
         digests: dict[TenantId, ProjectionDigest] = {}
         for tenant in self._ledger.tenants():
             digests[tenant] = self.process_events(self._ledger.read_events(tenant))
+        self._gateway.commit_rebuild()
         return digests
 
     def _project(self, event: StoredEvent) -> ProjectionDigest:

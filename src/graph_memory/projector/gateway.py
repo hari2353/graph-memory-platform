@@ -41,7 +41,14 @@ class EdgeRow:
 
 
 class GraphGateway(Protocol):
-    """Graph state port; adapters add, core never changes."""
+    """Graph state port; adapters add, core never changes.
+
+    Rebuild protocol (used by full replays): ``replace_all`` opens a rebuild
+    side so subsequent ``apply`` writes stage into a hold-out that readers do
+    not see; ``commit_rebuild`` publishes the staged state atomically. A
+    serving instance therefore never exposes a half-built graph: readers keep
+    observing the last committed projection mid-rebuild.
+    """
 
     def apply(self, ops: Sequence[NodeOp | EdgeOp]) -> None: ...
 
@@ -55,22 +62,38 @@ class GraphGateway(Protocol):
 
     def replace_all(self) -> None: ...
 
+    def commit_rebuild(self) -> None: ...
+
 
 class InMemoryGraphGateway:
-    """Deterministic store; identical semantics to the future CH adapter."""
+    """Deterministic store; identical semantics to the future CH adapter.
+
+    Rebuilds stage into a hold-out and publish with ``commit_rebuild`` —
+    readers never observe a half-built graph.
+    """
 
     def __init__(self) -> None:
         self._nodes: dict[tuple[str, str], NodeOp] = {}
         self._edges: dict[tuple[str, str, str, str, datetime], EdgeOp] = {}
+        self._staged_nodes: dict[tuple[str, str], NodeOp] | None = None
+        self._staged_edges: dict[tuple[str, str, str, str, datetime], EdgeOp] | None = None
+
+    def _node_target(self) -> dict[tuple[str, str], NodeOp]:
+        """Writes land in the open rebuild's staging, else the published side."""
+        return self._nodes if self._staged_nodes is None else self._staged_nodes
+
+    def _edge_target(self) -> dict[tuple[str, str, str, str, datetime], EdgeOp]:
+        return self._edges if self._staged_edges is None else self._staged_edges
 
     def apply(self, ops: Sequence[NodeOp | EdgeOp]) -> None:
+        nodes, edges = self._node_target(), self._edge_target()
         for op in ops:
             match op:
                 case NodeOp():
-                    self._nodes[(op.tenant, op.key)] = op
+                    nodes[(op.tenant, op.key)] = op
                 case EdgeOp():
                     key = (op.tenant, op.user, op.kind, op.target, op.valid_at)
-                    self._edges[key] = op
+                    edges[key] = op
                 case _:
                     raise TypeError(f"unsupported graph op: {type(op).__name__}")
 
@@ -108,5 +131,15 @@ class InMemoryGraphGateway:
         self._edges = {key: op for key, op in self._edges.items() if op.kind != kind}
 
     def replace_all(self) -> None:
-        self._nodes.clear()
-        self._edges.clear()
+        """Open a rebuild: stage into a hold-out readers cannot observe."""
+        self._staged_nodes = {}
+        self._staged_edges = {}
+
+    def commit_rebuild(self) -> None:
+        """Publish the staged state atomically (single pointer swap)."""
+        if self._staged_nodes is None or self._staged_edges is None:
+            return
+        self._nodes = self._staged_nodes
+        self._edges = self._staged_edges
+        self._staged_nodes = None
+        self._staged_edges = None

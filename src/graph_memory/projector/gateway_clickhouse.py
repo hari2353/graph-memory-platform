@@ -8,7 +8,8 @@ sharing the exact observation-identity semantics:
 - every read carries the tenant predicate in the WHERE clause;
 - ``clear_kind`` uses ``DELETE FROM`` (lightweight delete) for the
   reflection tick's wholesale similarity rewrite;
-- ``replace_all`` truncates (an ops decision, used by replay rebuilds).
+- ``replace_all`` opens a staged rebuild; ``commit_rebuild`` publishes it
+  with an atomic ``EXCHANGE TABLES`` — readers never see a half-built graph.
 
 Sync by contract — call it from threads at the edges.
 """
@@ -55,7 +56,13 @@ class ClickHouseGateway:
         self._nodes_table = nodes_table or settings.nodes_table
         self._edges_table = edges_table or settings.edges_table
         self._settings = settings
+        self._rebuild_open = False
         self._client_factory = bind_thread_local(client_factory)
+
+    def _target(self, table: str) -> str:
+        """Where writes land: staging during a rebuild, published otherwise."""
+        base = f"{self._database}.{table}"
+        return f"{base}__staging" if self._rebuild_open else base
 
     def _client(self) -> Client:
         """The calling thread's client (one HTTP session per thread)."""
@@ -69,6 +76,16 @@ class ClickHouseGateway:
     def ensure_graph_schema(self) -> None:
         for statement in build_graph_ddl(self._database, self._nodes_table, self._edges_table):
             self._client().command(statement)
+        # Rebuild staging partners: the same DDL under the staging names.
+        for statement in build_graph_ddl(
+            self._database,
+            self._staging_name(self._nodes_table),
+            self._staging_name(self._edges_table),
+        ):
+            self._client().command(statement)
+
+    def _staging_name(self, table: str) -> str:
+        return f"{table}__staging"
 
     def apply(self, ops: Sequence[NodeOp | EdgeOp]) -> None:
         node_rows: list[tuple[object, ...]] = []
@@ -99,13 +116,13 @@ class ClickHouseGateway:
                 raise TypeError(f"unsupported graph op: {type(op).__name__}")
         if node_rows:
             self._client().insert(
-                f"{self._database}.{self._nodes_table}",
+                self._target(self._nodes_table),
                 node_rows,
                 column_names=list(_NODES_COLUMNS),
             )
         if edge_rows:
             self._client().insert(
-                f"{self._database}.{self._edges_table}",
+                self._target(self._edges_table),
                 edge_rows,
                 column_names=list(_EDGES_COLUMNS),
             )
@@ -165,5 +182,41 @@ class ClickHouseGateway:
         )
 
     def replace_all(self) -> None:
-        self._client().command(f"TRUNCATE TABLE {self._database}.{self._nodes_table}")
-        self._client().command(f"TRUNCATE TABLE {self._database}.{self._edges_table}")
+        """Open a rebuild: stage into hold-out tables readers never see.
+
+        Truncating the STAGING side (not the published tables) keeps serving
+        readers on the last committed projection while the pass runs.
+        """
+        self._client().command(
+            f"TRUNCATE TABLE {self._database}.{self._staging_name(self._nodes_table)}"
+        )
+        self._client().command(
+            f"TRUNCATE TABLE {self._database}.{self._staging_name(self._edges_table)}"
+        )
+        self._rebuild_open = True
+
+    def commit_rebuild(self) -> None:
+        """Publish the staged state atomically (metadata-level table swap).
+
+        CLICKHOUSE ``EXCHANGE TABLES`` is atomic: readers see either the
+        previous projection or the new one, never a mixture. Afterwards the
+        (now stale, previously published) rows live in staging and are punted
+        so the next pass starts clean.
+        """
+        if not self._rebuild_open:
+            return
+        self._client().command(
+            f"EXCHANGE TABLES {self._database}.{self._nodes_table} "
+            f"AND {self._database}.{self._staging_name(self._nodes_table)}"
+        )
+        self._client().command(
+            f"EXCHANGE TABLES {self._database}.{self._edges_table} "
+            f"AND {self._database}.{self._staging_name(self._edges_table)}"
+        )
+        self._client().command(
+            f"TRUNCATE TABLE {self._database}.{self._staging_name(self._nodes_table)}"
+        )
+        self._client().command(
+            f"TRUNCATE TABLE {self._database}.{self._staging_name(self._edges_table)}"
+        )
+        self._rebuild_open = False
