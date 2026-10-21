@@ -52,6 +52,40 @@ stays identical (proven in CI, SPEC §16.1). Loop 2's LLM observer is an advisor
 port (`observability/observer.py`) — it records verdicts as span evidence, it
 never mutates graph state.
 
+## The pipeline, as one diagram
+
+[docs/diagrams/platform-signals.html](docs/diagrams/platform-signals.html)
+is a repository-backed dataflow diagram (auto-generated with
+[archify](https://github.com/tt-a1i/archify), pinned at revision `f89317c`,
+every node and edge citing its source lines). Five stages:
+
+**Deliver → Adjudicate → Ledger → Project → Serve.**
+
+1. **Deliver** — two front doors into one truth: the HTTP ingest app
+   (`POST /v1/signals:batch`; the tenant comes only from the bearer claim,
+   never a body field) and the Pulsar broker drain (`platform
+   drain-brokers`; base64 envelopes, backlog-bounded, cursor reset at
+   subscription creation).
+2. **Adjudicate** — one `IngestService` for both trails: batch-size bounds
+   and per-item validation; rejected items route through the poison sink
+   into a bounded, TTL'd DLQ — never silent drops, never batch aborts.
+3. **Ledger** — ClickHouse append-only events: `(tenant, dedup_key)` dedup,
+   `FINAL` reads for correctness.
+4. **Project** — the pure compiler replays stored events into graph ops,
+   convergent by identity: an incremental batch and a full rebuild land on
+   the same state; the effectiveness loop's `(kind, target, cohort)`
+   multiplier rows ride the same replay.
+5. **Serve** — REST/MCP/webhooks over the context read model: one point
+   lookup per user+capability behind a jittered-TTL single-flight cache,
+   staleness always surfaced; every request also emits a span-stub row and a
+   metering counter, sampled or not.
+
+Cross-references: the [usecase app's whole-flow
+diagram](https://github.com/hari2353/graph-memory-usecase/blob/master/docs/diagrams/whole-flow.html)
+shows what drives this pipeline, and the [ClickGraph serving-tier
+diagram](https://github.com/hari2353/clickgraph/blob/feat/schema-persistence/docs/diagrams/query-tracing.html)
+shows how Cypher reads the projected graph.
+
 ## Layout
 
 ```
