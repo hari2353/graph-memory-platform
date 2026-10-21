@@ -163,3 +163,21 @@ session; each lands green with its acceptance test. Pr/local only until push
 - Recorded (not built): `profile_snapshots`/`user_adjacency_rollup` CH
   materialization (ContextCache plays the role; backlog), OTLP→Langfuse exporter
   (SpanSink adapter; backlog), `platform dev --embedded` chdb tier (backlog).
+
+## Found live (2026-10-21, usecase drive)
+- [x] Defect: the serve per-interval pass ran eplace_all() as TRUNCATE +
+incremental insert, so concurrent REST/MCP readers observed half-built graphs
+every second (store flapped 12/14/17/0/20/0/10 across seconds; reads returned
+none mid-rebuild; the tutor-usecase drive's baseline reads hit empty windows).
+Fix: eplace_all() opens a staged rebuild (writes land in gm_*__staging
+hold-out tables; readers keep the last committed projection) and
+commit_rebuild() publishes it atomically with EXCHANGE TABLES (verified
+live: swap semantics proven on CH 25.12). commit_rebuild() is a GraphGateway
+port method; in-memory pointer-swaps, CH exchanges; engine.replay() commits
+at the end - serve boot / eplay run / platform loop run / the 1s pass all
+share the semantics; fresh-boot convergence (A16.2) untouched. Usecase drive
+follow-up: run-scoped experiment TENANT per run (tutor-app-run-<id>) so reruns
+inherit no prior ledger truth; baseline honestly flat.
+Verify: tests/unit/test_gateway_rebuild.py + tests/integration/
+test_gateway_swap_live.py (-m live); platforms gates re-run: 210 offline ok,
+14 live ok, hotpath p99 0.66ms ok, cost 0.977TB/mo ok.
