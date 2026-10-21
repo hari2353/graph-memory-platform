@@ -181,3 +181,32 @@ inherit no prior ledger truth; baseline honestly flat.
 Verify: tests/unit/test_gateway_rebuild.py + tests/integration/
 test_gateway_swap_live.py (-m live); platforms gates re-run: 210 offline ok,
 14 live ok, hotpath p99 0.66ms ok, cost 0.977TB/mo ok.
+- [x] Whole-loop leg shipped and proven end-to-end against the deployed
+  stack: `ops/compose/pulsar.yaml` (pulsar:3.3.5 standalone, persistent
+  volume, REST :8099 / binary :6650), `PulsarCliReceiver` drain worker
+  (admin REST + in-container CLI; JSON frames are poison-recorded, never
+  dropped) and the `platform drain-brokers` CLI wiring the broker trail into
+  the same ledger the HTTP ingest uses. Earned wire contract: topics
+  `gmp.signals.<tenant>`; payload = base64(events JSON); partition key =
+  user; after subscription creation run
+  `pulsar-admin topics reset-cursor -s <sub> -m earliest` (the REST
+  earliest-reset endpoint 404s on 3.3.5; CLI reset works).
+  Verify: usecase `uv run whole-loop` live (f66ce43 platform / 594122a
+  usecase): 16 signals produced -> drain accepted=16 -> flat baseline -> 8
+  outcomes via broker -> loop cells=4 -> REST diverged -> ClickGraph Cypher
+  reads match REST exactly (0.625/0.375).
+- [x] Usecase agent tier proven conversational: a FastMCP tool surface plus
+  an a2a-sdk v1 coach hosted in one process; the A2A conversation arc ran
+  against this repo live and visibly improved after one loop tick
+  (round-1 0.500 flat for all cohorts -> round-2 0.583 promoted tops,
+  diverged, narrative changed). a2a-sdk 1.2.3 contract notes for future
+  integrations: JSON-RPC method name is `SendMessage` (not
+  `message/send`); requests need the `A2A-Version: 1.0` header.
+  Verify: usecase 084bf06 (`uv run conversation` + `-m live` tier, 3 live
+  tests green).
+- Backlog (serving observations from the usecase drive): the projector
+  writes only user nodes, so graph-side skill endpoints must be materialized
+  (the usecase does it with read-only serving views over `gm_edges`); and
+  ClickGraph resolves node joins by key VALUE, so multi-tenant Cypher needs
+  the tenant property on every matched variable or lookalike keys leak
+  across tenants.
