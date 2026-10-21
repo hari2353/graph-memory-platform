@@ -24,7 +24,17 @@ from fastapi.responses import JSONResponse, Response
 
 from graph_memory.core.errors import PlatformError
 from graph_memory.core.ports import ContextProvider, TenantGuard
-from graph_memory.core.types import Capability, Json, Scope, UserContext, UserRef, user_key
+from graph_memory.core.types import (
+    Capability,
+    Json,
+    Scope,
+    TenantId,
+    UserContext,
+    UserRef,
+    user_key,
+)
+from graph_memory.observability.metering import MeteringCounters
+from graph_memory.observability.observer import SpanSink, SpanStub
 from graph_memory.tenancy.quotas import QuotaGuard
 
 _IDEMPOTENCY_TTL_S = 86_400
@@ -103,8 +113,16 @@ def create_rest_app(
     guard: TenantGuard,
     *,
     quota: QuotaGuard | None = None,
+    sink: SpanSink | None = None,
+    metering: MeteringCounters | None = None,
 ) -> FastAPI:
-    """Assemble the REST channel around injected ports (no framework leakage)."""
+    """Assemble the REST channel around injected ports (no framework leakage).
+
+    ``sink``/``metering`` are optional observability ports (SPEC §11/R7): when
+    wired, every request emits one span with per-stage wall times — sampled or
+    not; the audit stub's job is to land them all — and metering ticks the
+    per-(tenant, lane, event) counters.
+    """
     app = FastAPI(title="graph-memory-platform/rest", version="0.1.0")
     # Idempotency-Key replay store: (tenant, user, capability, key) -> (expiry, body).
     _replay: dict[tuple[str, str], tuple[float, dict[str, Json]]] = {}
@@ -113,15 +131,48 @@ def create_rest_app(
         authorization: str | None, scope: Scope, user: str, capability: str
     ) -> UserContext:
         """One checked read: guard first, tenant from claims only (SPEC §8/§15)."""
+        started = time.perf_counter()
+        principal = None
+        error_code: str | None = None
+        stages: dict[str, Json] = {}
         try:
+            stage_start = time.perf_counter()
             principal = guard.require_scope(_bearer_from(authorization), scope)
+            stages["authn"] = (time.perf_counter() - stage_start) * 1000.0
             if quota is not None:
+                stage_start = time.perf_counter()
                 quota.admit(principal, scope)
-            return await provider.get(
+                stages["admission"] = (time.perf_counter() - stage_start) * 1000.0
+            stage_start = time.perf_counter()
+            context = await provider.get(
                 principal, UserRef(principal.tenant, user_key(user)), Capability(capability)
             )
+            stages["lookup_assemble"] = (time.perf_counter() - stage_start) * 1000.0
+            if metering is not None:
+                metering.record(principal.tenant, "rest", "requests")
+            return context
         except PlatformError as exc:
+            error_code = exc.code
+            if exc.code == "quota_exceeded" and metering is not None and principal is not None:
+                metering.record(principal.tenant, "rest", "throttled")
             raise HTTPException(status_code=_status_for(exc), detail=exc.to_payload()) from exc
+        finally:
+            if sink is not None:
+                sink.append(
+                    SpanStub(
+                        name="gmp.channel.rest.request",
+                        tenant=(principal.tenant if principal is not None else TenantId("unknown")),
+                        at=datetime.now(tz=UTC),
+                        duration_ms=(time.perf_counter() - started) * 1000.0,
+                        attributes={
+                            "stages_ms": stages,
+                            "scope": str(scope),
+                            "user": user,
+                            "capability": capability,
+                            "outcome": error_code or "success",
+                        },
+                    )
+                )
 
     @app.get("/v1/context/{user}/{capability}")
     async def get_context(

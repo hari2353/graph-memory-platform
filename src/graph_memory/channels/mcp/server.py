@@ -22,7 +22,12 @@ from mcp.server.mcpserver.exceptions import ToolError
 from starlette.applications import Starlette
 
 from graph_memory.core.errors import PlatformError, ScopeDenied
-from graph_memory.core.ports import ContextProvider, TenantGuard
+from graph_memory.core.ports import (
+    ContextExplainer,
+    ContextProvider,
+    EffectivenessScorer,
+    TenantGuard,
+)
 from graph_memory.core.types import (
     Capability,
     Json,
@@ -100,12 +105,16 @@ def build_mcp_server(
     name: str = "graph-memory-platform",
     version: str = SERVER_VERSION,
     quota: QuotaGuard | None = None,
+    effectiveness: EffectivenessScorer | None = None,
+    explainer: ContextExplainer | None = None,
 ) -> MCPServer:
-    """Assemble the ≤4 tools around the injected ports (dependency inversion).
+    """Assemble the read-model tools around the injected ports (dependency inversion).
 
     ``capabilities`` and ``signal_schemas`` are declared summaries (built at
     the wiring edge from the mapping spec) so this module never imports the
-    mapping package — channels depend on core ports only.
+    mapping package — channels depend on core ports only. ``effectiveness``
+    and ``explainer`` are optional SPEC §5 faces; unwired, their tools fail
+    as anticipated tool errors, never silently.
     """
     server = MCPServer(
         name=name,
@@ -113,7 +122,8 @@ def build_mcp_server(
         instructions=(
             "Read-model tools over a per-user memory graph. Resolve the user's "
             "context by capability, search within it, inspect declared "
-            "capabilities, or see what signal types the platform maps."
+            "capabilities, see what signal types the platform maps, explain a "
+            "read's provenance, or read the effectiveness loop's report."
         ),
         middleware=[BearerHeaderTransport()],
     )
@@ -199,6 +209,49 @@ def build_mcp_server(
     async def get_signal_schema() -> dict[str, Json]:
         guard.require_scope(_bearer(), Scope.SIGNALS_WRITE)
         return {"signals": dict(signal_schemas)}
+
+    @server.tool(
+        name="get_effectiveness",
+        title="Get effectiveness report",
+        description=(
+            "The effectiveness loop's deterministic tick for the caller's "
+            "tenant: per (cohort, recommendation class) cells with Laplace "
+            "rates and the weight multipliers they wrote. Requires the loop "
+            "to be wired on this deployment."
+        ),
+        structured_output=True,
+    )
+    @_platform_errors
+    async def get_effectiveness() -> dict[str, Json]:
+        principal = guard.require_scope(_bearer(), Scope.CONTEXT_READ)
+        if effectiveness is None:
+            raise PlatformError(
+                "effectiveness loop is not wired on this deployment",
+                details={"tool": "get_effectiveness", "reason": "not_wired"},
+            )
+        return effectiveness.score(principal.tenant)
+
+    @server.tool(
+        name="explain_context",
+        title="Explain context provenance",
+        description=(
+            "Graph-annotated provenance for one (user, capability): the raw "
+            "edge observations under the served snapshot with per-observation "
+            "decayed scores and the mapping signals that produced each kind. "
+            "Requires the explainer to be wired on this deployment."
+        ),
+        structured_output=True,
+    )
+    @_platform_errors
+    async def explain_context(user: str, capability: str) -> dict[str, Json]:
+        principal = guard.require_scope(_bearer(), Scope.CONTEXT_READ)
+        if explainer is None:
+            raise PlatformError(
+                "context explainer is not wired on this deployment",
+                details={"tool": "explain_context", "reason": "not_wired"},
+            )
+        ref = UserRef(tenant=principal.tenant, user_key=user_key(user))
+        return explainer.explain(principal, ref, Capability(capability))
 
     return server
 

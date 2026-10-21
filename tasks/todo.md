@@ -133,3 +133,33 @@ session; each lands green with its acceptance test. Pr/local only until push
   Google Pub/Sub, Kinesis, Redis Streams.
 - Loop 3 strategy-variant A/B framework with pre-registered experiment plans.
 - TS SDK; optional embedding/semantic-search adapter.
+
+## Spec audit closure (2026-10-21 — full review against SPEC §5/§13/§16)
+
+- [x] Gap: MCP missing 2 of the SPEC-named tools → `get_effectiveness`
+  (`EffectivenessScorer` port + `context/explain.py` renderer) and
+  `explain_context` (`ContextExplainer` port: raw observations, per-row decayed
+  score, produced-by map); unwired deployments fail as anticipated tool errors.
+  Verify: tests/unit/test_mcp_channel.py (wired + unwired live-server tests).
+- [x] Gap: no durable tenant registry → `tenancy/registry_ch.py` (ReplacingMergeTree
+  metadata rows; idempotent onboard; shared lifecycle laws) + `platform tenancy
+  onboard|list|status`. Verify: live registry class + CLI tests (-m live).
+- [x] Gap: no loop operator artifact → `platform loop run` (+ the loop as part of
+  the deterministic boot path: stored rows carry tick weights, so serve boot /
+  `replay run` / the 1s projection pass all score+replay — ContinuousEffectivenessLoop,
+  Projector.set_overrides). A fresh boot re-derives the same state (§16.2 with loop ON).
+  Verify: tests/e2e/test_full_loop.py (fixed point + fresh-boot convergence identity).
+- [x] Gap: §11 hot-path spans were a port with no emitter → REST emits one span
+  per request with per-stage wall times (authn/admission/lookup_assemble);
+  ClickHouse span-stub table (`span_audit`) + buffered `ClickHouseSpanSink` +
+  `platform spans`; serve flushes on the projection tick.
+  Verify: tests/unit/test_rest_channel_spans.py + live sink roundtrip.
+- [x] Gap: §5 metering tables "from day 1" → MeteringCounters + MeteringTable
+  (`metering_events`) + REST ticks + `platform metering`. Verify: unit + live tests.
+- [x] Gap: `tests/e2e` tier and `replay run --from`/serve `--config` (§13) →
+  tests/e2e/test_full_loop.py; replay run with --from resume; serve --config YAML.
+  Verify: e2e journey; CLI conventions in ops/cli.py.
+- [x] Gap: ops compose posture → ops/compose/clickhouse.yaml (documented dev posture).
+- Recorded (not built): `profile_snapshots`/`user_adjacency_rollup` CH
+  materialization (ContextCache plays the role; backlog), OTLP→Langfuse exporter
+  (SpanSink adapter; backlog), `platform dev --embedded` chdb tier (backlog).

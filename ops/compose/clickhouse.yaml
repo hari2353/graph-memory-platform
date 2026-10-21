@@ -1,0 +1,28 @@
+# Local infra posture (SPEC §4/§13): one ClickHouse node on the documented
+# endpoint (127.0.0.1:8124, user `clickhouse`). The projector's live tier and
+# the POC demo reuse exactly this posture, so ops + tests never fork config.
+#
+# ClickGraph serving: the governance tier pins a released binary
+# (https://github.com/genezhang/clickgraph); it is a separate process, not a
+# sidecar of this stack — see docs/SPEC.md §4 for the pinned-version policy.
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: gmp-clickhouse
+    ports:
+      - "8124:8124"  # HTTP (the endpoint Settings defaults to)
+      - "9000:9000"  # native, for clickhouse-client during incident work
+    environment:
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: e2e-ch-pass-1234
+      CLICKHOUSE_DB: gmp
+    volumes:
+      - gmp-clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8124/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  gmp-clickhouse-data:

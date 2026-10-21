@@ -14,8 +14,10 @@ from typing import Protocol, TypeVar
 from graph_memory.core.types import (
     Capability,
     IngestResult,
+    Json,
     Principal,
     Scope,
+    TenantId,
     UserContext,
     UserRef,
 )
@@ -50,3 +52,26 @@ class ContextProvider(Protocol):
     async def get(
         self, principal: Principal, user: UserRef, capability: Capability
     ) -> UserContext: ...
+
+
+class EffectivenessScorer(Protocol):
+    """The loop's read face (SPEC §5 outputs): one tenant's tick as JSON data.
+
+    Adapters render ``EffectivenessReport`` rows; channels only know the
+    port — wiring is the composition root's job. When unwired, channels
+    serve the tool as an anticipated failure (never a silent empty).
+    """
+
+    def score(self, tenant: TenantId) -> dict[str, Json]: ...
+
+
+class ContextExplainer(Protocol):
+    """Graph-annotated provenance for one (user, capability) read.
+
+    Same structural tenant rule as ``ContextProvider``: the tenant comes
+    from the verified principal, the ref contributes the user only.
+    """
+
+    def explain(
+        self, principal: Principal, user: UserRef, capability: Capability
+    ) -> dict[str, Json]: ...

@@ -110,6 +110,30 @@ class Projector:
         self._clock = clock
         self._overrides = weight_overrides
 
+    @property
+    def spec(self) -> MappingSpec:
+        """Read-only spec view (provenance/explanation adapters reuse it)."""
+        return self._spec
+
+    @property
+    def gateway(self) -> GraphGateway:
+        """Read-only gateway view (provenance adapters reuse it)."""
+        return self._gateway
+
+    @property
+    def clock(self) -> Clock:
+        """Read-only clock view (provenance adapters reuse it)."""
+        return self._clock
+
+    def set_overrides(self, overrides: Mapping[tuple[str, str, str], float]) -> None:
+        """Refresh the loop's weight rows for the NEXT pass (continuous loop).
+
+        The rows are a deterministic function of the ledger; the composition
+        root re-derives them each pass and swaps them in before replaying —
+        which keeps a serving instance convergent after new outcomes land.
+        """
+        self._overrides = dict(overrides)
+
     def process_events(self, events: Sequence[StoredEvent]) -> ProjectionDigest:
         """Incremental projection for one batch, in canonical order."""
         digest = ProjectionDigest(events=len(events), plans=0, node_ops=0, edge_ops=0)

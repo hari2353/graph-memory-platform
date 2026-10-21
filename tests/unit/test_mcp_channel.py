@@ -19,6 +19,7 @@ import pytest
 import uvicorn
 
 from graph_memory.channels.mcp import PROTOCOL_REVISION, build_mcp_server, mcp_streamable_app
+from graph_memory.context.explain import context_explainer, effectiveness_reporter
 from graph_memory.context.service import ContextCache, MemoryContextProvider
 from graph_memory.core.clock import FixedClock
 from graph_memory.core.types import TenantId
@@ -35,7 +36,9 @@ _SPEC_PATH = Path(__file__).parent.parent / "fixtures" / "mapping_skill_loop.yam
 _TOKEN = "dev-acme-token"
 
 
-def _fixture_provider() -> tuple[MemoryContextProvider, MappingSpec]:
+def _fixture_provider() -> tuple[
+    MemoryContextProvider, MappingSpec, Projector, InMemoryLedger, FixedClock
+]:
     spec: MappingSpec = load_spec(_SPEC_PATH.read_text(encoding="utf-8"))
     ledger = InMemoryLedger()
     clock = FixedClock(datetime(2026, 6, 10, tzinfo=UTC))
@@ -53,7 +56,7 @@ def _fixture_provider() -> tuple[MemoryContextProvider, MappingSpec]:
         }
         ledger.append([record_from_envelope(_T, Envelope.parse(payload))])
     engine.process_events(ledger.read_events(_T))
-    return MemoryContextProvider(engine, ContextCache()), spec
+    return MemoryContextProvider(engine, ContextCache()), spec, engine, ledger, clock
 
 
 _SCHEMA_SUMMARY: dict[str, dict[str, Any]] = {
@@ -92,20 +95,34 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _wired_server() -> Any:
-    provider, spec = _fixture_provider()
+def _wired_server(*, with_faces: bool = True) -> Any:
+    provider, spec, engine, ledger, clock = _fixture_provider()
     guard = StaticBearerGuard(Settings().dev_static_tokens)
+    effectiveness = None
+    explainer = None
+    if with_faces:
+        effectiveness = effectiveness_reporter(spec, ledger, clock)
+        explainer = context_explainer(engine)
     return build_mcp_server(
         provider,
         guard,
         capabilities=tuple(sorted(spec.capabilities)),
         signal_schemas=_SCHEMA_SUMMARY,
+        effectiveness=effectiveness,
+        explainer=explainer,
     )
 
 
 @pytest.fixture()
 def stateless() -> Any:
     holder = _AppServer(mcp_streamable_app(_wired_server(), stateless=True))
+    yield holder
+    holder.stop()
+
+
+@pytest.fixture()
+def stateless_unwired() -> Any:
+    holder = _AppServer(mcp_streamable_app(_wired_server(with_faces=False), stateless=True))
     yield holder
     holder.stop()
 
@@ -126,7 +143,9 @@ async def test_stateless_mode_serves_tools_with_structured_content(stateless: _A
         listed = await session.list_tools()
         names = sorted(tool.name for tool in listed.tools)
         assert names == [
+            "explain_context",
             "get_context",
+            "get_effectiveness",
             "get_signal_schema",
             "list_capabilities",
             "search_memory",
@@ -177,6 +196,79 @@ async def test_unknown_capability_is_a_tool_error(stateless: _AppServer) -> None
         assert bad.is_error
         assert "not declared" in str(bad.model_dump())
         assert "capability_unknown" in str(bad.model_dump())
+
+
+async def test_effectiveness_and_explain_faces_serve_when_wired(
+    stateless: _AppServer,
+) -> None:
+    from mcp.client.session import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    client = _authed_async_client(stateless, {"Authorization": f"Bearer {_TOKEN}"})
+    async with (
+        streamable_http_client(stateless.url, http_client=client) as (read, write),
+        ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        eff = await session.call_tool("get_effectiveness", {})
+        assert not eff.is_error
+        eff_body = eff.structured_content
+        assert eff_body is not None
+        assert eff_body["tenant"] == "acme"
+        # The fixture ledger holds no reco/outcome pairs: an empty-but-honest
+        # report, not an invented one.
+        assert eff_body["reco_delivered"] == 0
+        assert eff_body["cells"] == []
+        assert eff_body["weight_overrides"] == {}
+
+        provenance = await session.call_tool(
+            "explain_context", {"user": "user-1", "capability": "skills"}
+        )
+        assert not provenance.is_error
+        body = provenance.structured_content
+        assert body is not None
+        assert body["capability"] == "skills"
+        assert body["user"] == "user-1"
+        assert isinstance(body["top_k"], int) and body["top_k"] > 0
+        observations = body["observations"]
+        assert isinstance(observations, list) and len(observations) >= 2
+        first = observations[0]
+        assert set(first) == {
+            "kind",
+            "target",
+            "weight",
+            "half_life_days",
+            "valid_at",
+            "score",
+            "produced_by",
+        }
+        assert first["kind"] == "HAS_SKILL"
+        assert first["produced_by"] == ["itf.skill_assessed.v1"]
+        # Deterministic descending score order (sorted on the tuple).
+        scores = [float(entry["score"]) for entry in observations]
+        assert scores == sorted(scores, reverse=True)
+
+
+async def test_unwired_faces_fail_as_anticipated_tool_errors(
+    stateless_unwired: _AppServer,
+) -> None:
+    from mcp.client.session import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    client = _authed_async_client(stateless_unwired, {"Authorization": f"Bearer {_TOKEN}"})
+    async with (
+        streamable_http_client(stateless_unwired.url, http_client=client) as (read, write),
+        ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        eff = await session.call_tool("get_effectiveness", {})
+        provenance = await session.call_tool(
+            "explain_context", {"user": "user-1", "capability": "skills"}
+        )
+        assert eff.is_error
+        assert "not_wired" in str(eff.model_dump())
+        assert provenance.is_error
+        assert "not_wired" in str(provenance.model_dump())
 
 
 def _authed_async_client(holder: _AppServer, headers: dict[str, str]) -> Any:
