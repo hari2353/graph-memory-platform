@@ -310,6 +310,20 @@ class ClickHouseLedger:
         )
 
 
+class LedgerPoisonSink:
+    """PoisonSink adapter routing rejections into the ledger backend's DLQ.
+
+    The deployment wiring for every non-HTTP ingest path (broker drains and
+    any future channel): poison payloads become DLQ rows instead of dropping.
+    """
+
+    def __init__(self, ledger: ClickHouseLedger) -> None:
+        self._ledger = ledger
+
+    def record(self, tenant: TenantId, payload: str, reason: str) -> None:
+        self._ledger.write_dlq(tenant, payload, reason)
+
+
 def stored_row(row: Sequence[object]) -> StoredEvent:
     """Rebuild a StoredEvent from one FINAL-read ledger row."""
     return StoredEvent(

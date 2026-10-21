@@ -69,7 +69,7 @@ src/graph_memory/
   evals/        hit-rate@k, counterfactual replay, lift (SPEC §11/R7)
   observability/ CH span-stub audit sink + metering tables + observer port
   spikit/       broker conformance kit (the adapters' shared test kit)
-  ops/          CLI: platform replay|serve|loop|tenancy|spans|metering|bench
+  ops/          CLI: platform replay|serve|loop|tenancy|spans|metering|bench|drain-brokers
 tests/
   unit/         determinism, channels, tenancy, brokers, loop, gates, spans
   e2e/          full-loop offline journey (tenancy→ingest→loop→fixed point)
@@ -80,6 +80,14 @@ tasks/          plan.md, todo.md
 ```
 
 ## Channels (parity proven in CI)
+
+**Broker drain** (the Whole-loop ingest front door besides HTTP):
+`docker compose -f ops/compose/pulsar.yaml up -d` boots a real Apache Pulsar
+standalone; producers publish `base64(envelope JSON)` with ordering key =
+partition key to `gmp.signals.<tenant>`; `platform drain-brokers` consumes via
+the admin REST + the broker image's own CLI (backlog-driven, bounded, cursor
+reset at creation) and adjudicates through the same ingest service the HTTP
+channel uses - one ledger, no second ingest truth; poison lands in the DLQ.
 
 | Channel | Contract |
 |---|---|

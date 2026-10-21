@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     max_batch_events: int = 10_000
     max_payload_bytes: int = 65_536  # CloudEvents' 64 KiB intermediary guidance
 
+    # Pulsar dev posture (ops/compose/pulsar.yaml + the drain-brokers command)
+    pulsar_admin_url: str = "http://127.0.0.1:8099"
+    pulsar_container: str = "gmp-dev-pulsar"
+    pulsar_namespace: str = "public/default"
+    pulsar_drain_subscription: str = "gmp-drain"
+
     dev_static_tokens: dict[str, str] = {
         "dev-acme-token": "acme",
         "dev-other-token": "other",

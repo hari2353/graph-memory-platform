@@ -18,6 +18,7 @@ from graph_memory.observability.metering import MeteringCounters, MeteringTable
 from graph_memory.projector.engine import Projector
 from graph_memory.settings import Settings
 from graph_memory.signals.ledger import ClickHouseLedger, InMemoryLedger, LedgerRepository
+from graph_memory.signals.service import BatchOutcome
 
 PROJECTION_INTERVAL_S = 1.0  # serve's convergent-replay cadence
 
@@ -525,6 +526,73 @@ def cost(events_per_day: int, months: int, codec_ratio: float) -> None:
     click.echo(report.render())
     if not within_budget(report):
         raise SystemExit(1)
+
+
+@cli.command("drain-brokers")
+@click.option(
+    "--backend",
+    type=click.Choice(["pulsar"]),
+    default="pulsar",
+    show_default=True,
+    help="broker to drain (M2 adapters — pulsar front door first)",
+)
+@click.option(
+    "--limit",
+    default=None,
+    type=int,
+    help="cap the messages drained this pass (default: whole backlog)",
+)
+def drain_brokers(backend: str, limit: int | None) -> None:
+    """Drain broker topics into the ledger (the whole-loop ingest front door).
+
+    Signals arrive broker-side (ordering key = partition key per the kit), get
+    consumed from the broker, and are adjudicated by the same ingest service
+    the HTTP channel uses — one ledger, no second ingest truth. Poison frames
+    land in the DLQ, never silently dropped.
+
+    Dev broker: ``docker compose -f ops/compose/pulsar.yaml up -d``.
+    Topics: ``gmp.signals.<tenant>``; payloads: base64(envelope JSON) (the CLI
+    framing contract — see brokers/pulsar_cli.py).
+    """
+    import httpx
+
+    from graph_memory.signals.brokers import BrokerIngestor, PulsarIngester
+    from graph_memory.signals.brokers.pulsar_cli import PulsarCliReceiver, docker_exec_runner
+    from graph_memory.signals.ledger import LedgerPoisonSink
+
+    if backend != "pulsar":
+        raise click.ClickException(f"unsupported broker backend: {backend!r}")
+    settings = Settings()
+    deployed = ClickHouseLedger(settings)
+    deployed.ensure_schema()
+    ingestor = BrokerIngestor(deployed, poison=LedgerPoisonSink(deployed))
+    receiver = PulsarCliReceiver(
+        settings,
+        runner=docker_exec_runner(settings.pulsar_container),
+        client=httpx.Client(timeout=15.0),
+        max_messages=limit,
+    )
+
+    async def drain_pass() -> dict[str, BatchOutcome]:
+        return await PulsarIngester(receiver, ingestor).drain()
+
+    try:
+        outcomes = asyncio.run(drain_pass())
+    except Exception as exc:  # noqa: BLE001 — surfaced as the command's failure
+        raise click.ClickException(f"pulsar drain failed: {exc}") from exc
+
+    click.echo("DRAIN (broker -> ledger)")
+    if not outcomes:
+        click.echo("  (no gmp.signals.* topics)")
+    for tenant, outcome in sorted(outcomes.items()):
+        result = outcome.result
+        click.echo(
+            f"  tenant {tenant}: accepted={result.accepted} "
+            f"duplicates={result.duplicates} rejected={len(outcome.rejected)}"
+        )
+        for rejection in outcome.rejected:
+            error = rejection.error
+            click.echo(f"    rejected item {rejection.index}: {error.get('error')}")
 
 
 if __name__ == "__main__":

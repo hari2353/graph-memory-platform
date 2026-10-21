@@ -1,0 +1,28 @@
+# Apache Pulsar — the dev broker for the whole-loop posture (M2 Pulsar adapter).
+#
+# Standalone mode, no function workers / no stream storage: the smallest real
+# broker able to front the ledger. Signals land on persistent topics named by
+# the platform's routing rule (``gmp.signals.<tenant>``); consumers drain via
+# the Pulsar adapter (duck-typed receiver, ledger owns dedup).
+#
+#   docker compose -f ops/compose/pulsar.yaml up -d
+#   ... drain: platform drain-brokers --broker pulsar
+
+services:
+  pulsar:
+    image: apachepulsar/pulsar:3.3.5
+    container_name: gmp-dev-pulsar
+    command: >
+      /pulsar/bin/pulsar standalone --no-functions-worker --no-stream-storage
+    environment:
+      PULSAR_MEM: "-Xmx640m"
+      PULSAR_GC: "-XX:+UseG1GC"
+    ports:
+      - "6650:6650" # binary protocol — real client libraries connect here
+      - "8099:8080" # HTTP admin/REST — probes and the drain receiver
+    healthcheck:
+      test: ["CMD", "bin/pulsar-admin", "brokers", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 40s

@@ -4,6 +4,7 @@ from graph_memory.signals.envelope import CLOUDEVENTS_SPECVERSION, ENVELOPE_VERS
 from graph_memory.signals.ledger import (
     ClickHouseLedger,
     InMemoryLedger,
+    LedgerPoisonSink,
     LedgerRecord,
     LedgerRepository,
     StoredEvent,
@@ -20,6 +21,7 @@ __all__ = [
     "Envelope",
     "IngestService",
     "InMemoryLedger",
+    "LedgerPoisonSink",
     "LedgerRecord",
     "LedgerRepository",
     "NullPoisonSink",
