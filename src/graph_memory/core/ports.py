@@ -75,3 +75,54 @@ class ContextExplainer(Protocol):
     def explain(
         self, principal: Principal, user: UserRef, capability: Capability
     ) -> dict[str, Json]: ...
+
+
+class MemoryForget(Protocol):
+    """User-facing memory control (research 06 §governance, M4.1): forget.
+
+    A forget is emitted as a governed LEDGER EVENT under the new coarse
+    scope ``memory:write`` — never a hidden row edit — so the tombstone is
+    auditable and its supersession is the pure, replay-convergent
+    projection every other signal goes through. Implementations bind the
+    declared forget signal types from the mapping spec and return the
+    emitted event's identity plus the ingest counts.
+    """
+
+    def forget(
+        self, principal: Principal, user: UserRef, kind: str, target: str | None
+    ) -> dict[str, Json]: ...
+
+
+class MemorySearch(Protocol):
+    """Ad-hoc ranked retrieval over ONE user's graph (research 06 lever 2, M4.2).
+
+    Hybrid without an embedding service on the hot path: lexical matching
+    (one shared metric — ``core.lexicon``), typed/traversal ordering from
+    the mapping spec, and the behavior loop's weights as a ranking feature
+    (no competitor ranks on loop evidence). Retrieval is per-user point
+    work (decayed_score at one injected Clock instant; bounded result), ad
+    hoc — never the default context assembly path. Item payloads carry the
+    ranking features verbatim so channels render evidence, not vibes.
+    """
+
+    def search(
+        self,
+        principal: Principal,
+        user: UserRef,
+        query: str,
+        *,
+        capability: Capability | None,
+        limit: int,
+    ) -> dict[str, Json]: ...
+
+
+class EmbeddingProvider(Protocol):
+    """Optional vector similarity seam (research 06 lever 2, M4.2).
+
+    Parked DELIBERATELY: no embedding service rides the default context
+    assembly or the hot-path SLA. A local ONNX adapter (cheap, deterministic
+    batch embeds) implements this when a deployment opts in; nothing in
+    core depends on it. Vectors are float tuples only — no numpy inside core.
+    """
+
+    def embed(self, texts: Sequence[str]) -> tuple[tuple[float, ...], ...]: ...

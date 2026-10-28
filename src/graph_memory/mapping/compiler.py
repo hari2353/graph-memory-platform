@@ -5,7 +5,8 @@ envelope and spec version always produce the same plan, which is what makes
 replay convergence provable (SPEC §3). Consequences:
 
 - A signal type with rules emits ``nodes`` (idempotent upserts) then ``edges``
-  (observations the gateway merges into decayed state).
+  (observations the gateway merges into decayed state); forget-only signals
+  emit ``forgets`` (supersession directives the gateway keeps as overlay).
 - Signal types absent from the spec compile to an EMPTY plan — they land in
   the ledger (truth) but touch nothing: additive-only evolution, forward safe.
 """
@@ -50,6 +51,28 @@ class EdgeOp:
 
 
 @dataclass(frozen=True)
+class ForgetOp:
+    """One forget directive (M4.1, research 06): supersede, never delete.
+
+    Stored as its own overlay row in the gateway — NOT a mutation of the
+    matching edge rows — so it stays an idempotent, identity-keyed pure
+    function of its event (convergent under any delivery permutation) and
+    the audit story is a fact about one event, not a delta over state.
+
+    ``target=None`` forgets the whole relation kind; a set target forgets
+    the exact observations whose resolved target matches. ``forget_at``
+    bounds the supersession: only observations with ``valid_at <=
+    forget_at`` die, so a forget never harms facts learned after it.
+    """
+
+    tenant: TenantId
+    user: UserKey
+    kind: str
+    target: str | None
+    forget_at: datetime
+
+
+@dataclass(frozen=True)
 class ProjectionPlan:
     """Everything one event contributes; ordered for byte-stable equivalence."""
 
@@ -57,6 +80,7 @@ class ProjectionPlan:
     signal: str
     nodes: tuple[NodeOp, ...]
     edges: tuple[EdgeOp, ...]
+    forgets: tuple[ForgetOp, ...] = ()
 
 
 def compile_plan(
@@ -77,6 +101,10 @@ def compile_plan(
     pure function — replay stays a pure function of
     ``(ledger, spec version, overrides, clock)``. The cohort comes from the
     event's declared route, so weight rows apply per cohort, not globally.
+
+    Forget rules (M4.1) emit ``ForgetOp`` directives bound to the forget
+    event's own instant; they carry no weight — supersession time, not
+    magnitude, is their payload.
     """
     context = envelope_context(envelope)
     user = UserKey(str(context["partitionkey"]))
@@ -117,7 +145,23 @@ def compile_plan(
                 valid_at=envelope.occurred_at,
             )
         )
-    return ProjectionPlan(tenant=tenant, signal=envelope.type, nodes=nodes, edges=tuple(edges))
+    forgets: list[ForgetOp] = []
+    for directive in rule.forgets:
+        forget_target = (
+            None if directive.target is None else resolve_template(directive.target, context)
+        )
+        forgets.append(
+            ForgetOp(
+                tenant=tenant,
+                user=user,
+                kind=directive.kind,
+                target=forget_target,
+                forget_at=envelope.occurred_at,
+            )
+        )
+    return ProjectionPlan(
+        tenant=tenant, signal=envelope.type, nodes=nodes, edges=tuple(edges), forgets=tuple(forgets)
+    )
 
 
 def _override(

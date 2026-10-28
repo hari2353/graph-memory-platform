@@ -1,0 +1,40 @@
+# The governed-forgetting fixture (M4.1, research 06): write rules plus a
+# dedicated forget family. Kept separate from the reference mapping fixture
+# so channel tests can opt into the forget flow without re-baselining.
+# mapping_version is immutable per artifact; evolution is additive (SPEC §18).
+mapping_version: 1
+signals:
+  itf.skill_assessed.v1:
+    nodes:
+      - key: "skill:{data.skill}"
+        labels: [skill]
+        props:
+          name: "{data.skill}"
+    edges:
+      - kind: HAS_SKILL
+        target: "skill:{data.skill}"
+        weight: 1.0
+        half_life_days: 180
+  itf.reco.v1:
+    edges:
+      - kind: RECOMMENDED
+        target: "skill:{data.skill}"
+        weight: 0.5
+        half_life_days: 14
+  itf.forget_all_skills.v1:
+    # Kind-wide: no target — every HAS_SKILL observation at/before the
+    # forget event's time is superseded.
+    forgets:
+      - kind: HAS_SKILL
+  itf.forget_one_skill.v1:
+    # Target-scoped: the concrete {data.target} observation dies.
+    forgets:
+      - kind: HAS_SKILL
+        target: "{data.target}"
+  itf.drop_reco.v1:
+    forgets:
+      - kind: RECOMMENDED
+capabilities:
+  skills:
+    relations: [HAS_SKILL]
+    top_k: 5

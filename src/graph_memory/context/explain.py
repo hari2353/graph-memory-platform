@@ -117,6 +117,17 @@ def context_explainer(engine: Projector) -> ContextExplainerAdapter:
             for row in engine.gateway.observations(principal.tenant, ref.user_key)
             if row.kind in rule.relations
         ]
+        # Governed forgetting left an audit trail (M4.1): the directives that
+        # superseded this user's observations are provenance, shown verbatim.
+        forgotten: list[Json] = [
+            {
+                "kind": directive.kind,
+                "target": directive.target,
+                "scope": "kind_wide" if directive.target is None else "target",
+                "forget_at": directive.forget_at.isoformat(),
+            }
+            for directive in engine.gateway.forget_directives(principal.tenant, ref.user_key)
+        ]
         # Score once, sort on the tuple (provenance output is deterministic).
         scored: list[tuple[float, str, str, dict[str, Json]]] = []
         for row in rows:
@@ -155,6 +166,7 @@ def context_explainer(engine: Projector) -> ContextExplainerAdapter:
             "top_k": rule.top_k,
             "observations": items,
             "produced_by_map": producible_map,
+            "forget_directives": forgotten,
         }
 
     return ContextExplainerAdapter(render)

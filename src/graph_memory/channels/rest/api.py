@@ -12,6 +12,7 @@ Same guards, same provider, same error payloads as MCP — only the wire differs
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -21,9 +22,10 @@ from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel
 
 from graph_memory.core.errors import PlatformError
-from graph_memory.core.ports import ContextProvider, TenantGuard
+from graph_memory.core.ports import ContextProvider, MemoryForget, MemorySearch, TenantGuard
 from graph_memory.core.types import (
     Capability,
     Json,
@@ -41,6 +43,13 @@ _IDEMPOTENCY_TTL_S = 86_400
 _MAX_ITEM_LIMIT = 100
 
 
+class ForgetRequest(BaseModel):
+    """The governed forget body: relation kind + optional concrete target."""
+
+    kind: str
+    target: str | None = None
+
+
 def _bearer_from(authorization: str | None) -> str:
     """Header value or hard fail; the guard rejects empty as unknown credential."""
     if authorization is None:
@@ -49,6 +58,15 @@ def _bearer_from(authorization: str | None) -> str:
             details={"reason": "unknown_credential"},
         )
     return authorization
+
+
+_STATUS_HINTS: dict[str, int] = {
+    "tenant_mismatch": 400,
+    "quota_exceeded": 429,
+    "batch_over_budget": 429,
+    "forget_target_mismatch": 400,
+    "forget_kind_unknown": 404,
+}
 
 
 def _status_for(exc: PlatformError) -> int:
@@ -60,9 +78,7 @@ def _status_for(exc: PlatformError) -> int:
         return 404
     if exc.code in {"tenant_revoked", "tenant_suspended", "tenant_not_found"}:
         return 403
-    return {"tenant_mismatch": 400, "quota_exceeded": 429, "batch_over_budget": 429}.get(
-        exc.code, 500
-    )
+    return _STATUS_HINTS.get(exc.code, 500)
 
 
 def _stale_iso(generated_at: datetime, max_age_ms: int) -> str:
@@ -115,13 +131,19 @@ def create_rest_app(
     quota: QuotaGuard | None = None,
     sink: SpanSink | None = None,
     metering: MeteringCounters | None = None,
+    forget: MemoryForget | None = None,
+    search: MemorySearch | None = None,
 ) -> FastAPI:
     """Assemble the REST channel around injected ports (no framework leakage).
 
     ``sink``/``metering`` are optional observability ports (SPEC §11/R7): when
     wired, every request emits one span with per-stage wall times — sampled or
     not; the audit stub's job is to land them all — and metering ticks the
-    per-(tenant, lane, event) counters.
+    per-(tenant, lane, event) counters. ``forget`` is the governed
+    memory-control port (research 06, M4.1); unwired, ``POST /v1/forget``
+    fails as an anticipated error, never silently. ``search`` is the hybrid
+    ranked-retrieval port (research 06 lever 2, M4.2); unwired, ``GET
+    /v1/search`` likewise fails as an anticipated error.
     """
     app = FastAPI(title="graph-memory-platform/rest", version="0.1.0")
     # Idempotency-Key replay store: (tenant, user, capability, key) -> (expiry, body).
@@ -273,5 +295,134 @@ def create_rest_app(
             return JSONResponse(content=stored, headers={"Idempotency-Replayed": "true"})
         _replay[key] = (time.monotonic() + _IDEMPOTENCY_TTL_S, body)
         return JSONResponse(content=body)
+
+    @app.post("/v1/forget/{user}")
+    async def forget_memory(
+        user: str,
+        body: ForgetRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> JSONResponse:
+        """Governed forget: bump the user's relation kind out of the read model.
+
+        The tenant derives from the credential; the forget lands as a ledger
+        event (auditable, replay-convergent supersession — M4.1). Metering
+        ticks one ``forget`` row per admitted call; the span records the
+        emittance stage for the audit trail.
+        """
+        started = time.perf_counter()
+        principal = None
+        error_code: str | None = None
+        stages: dict[str, Json] = {}
+        result: dict[str, Json] = {}
+        try:
+            stage_start = time.perf_counter()
+            principal = guard.require_scope(_bearer_from(authorization), Scope.MEMORY_WRITE)
+            stages["authn"] = (time.perf_counter() - stage_start) * 1000.0
+            if quota is not None:
+                stage_start = time.perf_counter()
+                quota.admit(principal, Scope.MEMORY_WRITE)
+                stages["admission"] = (time.perf_counter() - stage_start) * 1000.0
+            if forget is None:
+                raise PlatformError(
+                    "memory forgetting is not wired on this deployment",
+                    details={"endpoint": "/v1/forget", "reason": "not_wired"},
+                )
+            stage_start = time.perf_counter()
+            ref = UserRef(principal.tenant, user_key(user))
+            result = await asyncio.to_thread(forget.forget, principal, ref, body.kind, body.target)
+            stages["forget_emit"] = (time.perf_counter() - stage_start) * 1000.0
+            if metering is not None:
+                metering.record(principal.tenant, "rest", "forget")
+            return JSONResponse(content=result, status_code=200)
+        except PlatformError as exc:
+            error_code = exc.code
+            if exc.code == "quota_exceeded" and metering is not None and principal is not None:
+                metering.record(principal.tenant, "rest", "throttled")
+            raise HTTPException(status_code=_status_for(exc), detail=exc.to_payload()) from exc
+        finally:
+            if sink is not None:
+                sink.append(
+                    SpanStub(
+                        name="gmp.channel.rest.forget",
+                        tenant=(principal.tenant if principal is not None else TenantId("unknown")),
+                        at=datetime.now(tz=UTC),
+                        duration_ms=(time.perf_counter() - started) * 1000.0,
+                        attributes={
+                            "stages_ms": stages,
+                            "scope": str(Scope.MEMORY_WRITE),
+                            "user": user,
+                            "kind": body.kind,
+                            "outcome": error_code or "success",
+                        },
+                    )
+                )
+
+    @app.get("/v1/search/{user}")
+    async def search_memory(
+        user: str,
+        q: str = "",
+        capability: str | None = None,
+        limit: int = 8,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> JSONResponse:
+        """Hybrid ranked search over ONE user's graph (research 06, M4.2).
+
+        Tenant from the credential; per-user point retrieval in the store
+        (no global scans); bounded ``limit``. Metering ticks one ``search``
+        row per admitted call; the span carries the query stages for audit.
+        """
+        started = time.perf_counter()
+        principal = None
+        error_code: str | None = None
+        stages: dict[str, Json] = {}
+        try:
+            stage_start = time.perf_counter()
+            principal = guard.require_scope(_bearer_from(authorization), Scope.MEMORY_SEARCH)
+            stages["authn"] = (time.perf_counter() - stage_start) * 1000.0
+            if quota is not None:
+                stage_start = time.perf_counter()
+                quota.admit(principal, Scope.MEMORY_SEARCH)
+                stages["admission"] = (time.perf_counter() - stage_start) * 1000.0
+            if search is None:
+                raise PlatformError(
+                    "ranked search is not wired on this deployment",
+                    details={"endpoint": "/v1/search", "reason": "not_wired"},
+                )
+            stage_start = time.perf_counter()
+            ref = UserRef(principal.tenant, user_key(user))
+            result = await asyncio.to_thread(
+                search.search,
+                principal,
+                ref,
+                q,
+                capability=(None if capability is None else Capability(capability)),
+                limit=limit,
+            )
+            stages["search_rank"] = (time.perf_counter() - stage_start) * 1000.0
+            if metering is not None:
+                metering.record(principal.tenant, "rest", "search")
+            return JSONResponse(content=result, status_code=200)
+        except PlatformError as exc:
+            error_code = exc.code
+            if exc.code == "quota_exceeded" and metering is not None and principal is not None:
+                metering.record(principal.tenant, "rest", "throttled")
+            raise HTTPException(status_code=_status_for(exc), detail=exc.to_payload()) from exc
+        finally:
+            if sink is not None:
+                sink.append(
+                    SpanStub(
+                        name="gmp.channel.rest.search",
+                        tenant=(principal.tenant if principal is not None else TenantId("unknown")),
+                        at=datetime.now(tz=UTC),
+                        duration_ms=(time.perf_counter() - started) * 1000.0,
+                        attributes={
+                            "stages_ms": stages,
+                            "scope": str(Scope.MEMORY_SEARCH),
+                            "user": user,
+                            "query_len": len(q),
+                            "outcome": error_code or "success",
+                        },
+                    )
+                )
 
     return app

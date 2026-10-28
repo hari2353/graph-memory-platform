@@ -143,6 +143,7 @@ async def test_stateless_mode_serves_tools_with_structured_content(stateless: _A
         listed = await session.list_tools()
         names = sorted(tool.name for tool in listed.tools)
         assert names == [
+            "delete_memory",
             "explain_context",
             "get_context",
             "get_effectiveness",

@@ -48,6 +48,7 @@ class ProjectionDigest:
     plans: int
     node_ops: int
     edge_ops: int
+    forget_ops: int = 0
 
     def __add__(self, other: ProjectionDigest) -> ProjectionDigest:
         return ProjectionDigest(
@@ -55,6 +56,7 @@ class ProjectionDigest:
             plans=self.plans + other.plans,
             node_ops=self.node_ops + other.node_ops,
             edge_ops=self.edge_ops + other.edge_ops,
+            forget_ops=self.forget_ops + other.forget_ops,
         )
 
 
@@ -170,11 +172,14 @@ class Projector:
         ops.extend(plan.nodes)
         ops.extend(plan.edges)
         self._gateway.apply(ops)
+        if plan.forgets:
+            self._gateway.apply_forgets(plan.forgets)
         return ProjectionDigest(
             events=0,  # the fed-batch total is counted once by process_events
             plans=1,
             node_ops=len(plan.nodes),
             edge_ops=len(plan.edges),
+            forget_ops=len(plan.forgets),
         )
 
     def reflect(self, *, min_shared: int = _SIMILAR_MIN_SHARED) -> ReflectionDigest:

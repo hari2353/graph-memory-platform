@@ -5,6 +5,9 @@ v1 grammar (additive-only evolution — SPEC §5, §18):
   property values are ``{placeholder}`` templates resolved against the
   envelope (``{data.<path>}``, ``{partitionkey}``, ``{time}``, ...).
 - edges carry a constant weight, a decay half-life, and the target node key.
+- ``forgets`` (M4.1, research 06): per signal type, forget directives — the
+  governed negative of edge rules. A signal family dedicates itself to
+  forgetting: it may declare forgets OR nodes/edges, never both.
 - ``capabilities``: which relation sets a context capability exposes, with
   ``top_k`` and ``ttl_ms`` (the staleness contract channels honor).
 
@@ -30,6 +33,7 @@ from graph_memory.signals.envelope import Envelope
 VERSION = 1
 _MAX_NODES_PER_SIGNAL = 32
 _MAX_EDGES_PER_SIGNAL = 64
+_MAX_FORGETS_PER_SIGNAL = 16
 
 _KIND = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 _LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,31}$")
@@ -183,6 +187,46 @@ class EdgeRule(BaseModel):
         return value
 
 
+class ForgetRule(BaseModel):
+    """One forget directive per matching signal event (research 06, M4.1).
+
+    The negative of ``EdgeRule``: a forget declares the relation kind whose
+    observations this signal invalidates — bi-temporal supersession, never
+    deletion — optionally scoped to one target node template. ``target``
+    absent means the WHOLE kind (wholesale forget); ``target`` present means
+    the exact observation whose resolved target matches.
+
+    Reflective kinds are excluded: ``SIMILAR_TO`` is reflection-owned and
+    rewritten wholesale every tick, so forgetting it is a spec error, not a
+    runtime decision.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: str
+    target: str | None = None
+
+    @field_validator("kind")
+    @classmethod
+    def _forgettable_kind(cls, value: str) -> str:
+        if not _KIND.match(value):
+            raise PydanticCustomError(
+                "mapping_error", f"unsafe forget kind {value!r} (UPPER_SNAKE, 2..64)"
+            )
+        if value in _SYSTEM_KINDS:
+            raise PydanticCustomError(
+                "mapping_error", f"{value!r} is reflection-owned and cannot be forgotten"
+            )
+        return value
+
+    @field_validator("target")
+    @classmethod
+    def _target_template(cls, value: str | None) -> str | None:
+        if value is not None:
+            _validate_template(value)
+        return value
+
+
 class SignalRule(BaseModel):
     """Everything one signal type produces per event."""
 
@@ -190,6 +234,7 @@ class SignalRule(BaseModel):
 
     nodes: tuple[NodeRule, ...] = ()
     edges: tuple[EdgeRule, ...] = ()
+    forgets: tuple[ForgetRule, ...] = ()
 
     @field_validator("nodes")
     @classmethod
@@ -204,6 +249,31 @@ class SignalRule(BaseModel):
         if len(value) > _MAX_EDGES_PER_SIGNAL:
             raise PydanticCustomError("mapping_error", "too many edge rules")
         return value
+
+    @field_validator("forgets")
+    @classmethod
+    def _forgets_bounded_and_unique(cls, value: tuple[ForgetRule, ...]) -> tuple[ForgetRule, ...]:
+        if len(value) > _MAX_FORGETS_PER_SIGNAL:
+            raise PydanticCustomError("mapping_error", "too many forget rules")
+        kinds = [rule.kind for rule in value]
+        if len(set(kinds)) != len(kinds):
+            raise PydanticCustomError("mapping_error", "duplicate forget kind in one signal")
+        return value
+
+    @model_validator(mode="after")
+    def _forget_is_exclusive(self) -> Self:
+        """A signal either writes relations or forgets them — never both.
+
+        Mixing makes the audit ledger ambiguous (one event both asserting
+        and superseding in the same instant); the mapping grammar keeps the
+        two action families in distinct declared signal types instead.
+        """
+        if self.forgets and (self.nodes or self.edges):
+            raise PydanticCustomError(
+                "mapping_error",
+                "a signal rule either declares nodes/edges or forgets, not both",
+            )
+        return self
 
 
 class CapabilityRule(BaseModel):

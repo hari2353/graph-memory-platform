@@ -132,7 +132,8 @@ def replay_run(mapping_path: str, from_iso: str | None, backend: str) -> None:
     for tenant, digest in sorted(digests.items()):
         click.echo(
             f"replay[{tenant}]: events={digest.events} plans={digest.plans} "
-            f"node_ops={digest.node_ops} edge_ops={digest.edge_ops}"
+            f"node_ops={digest.node_ops} edge_ops={digest.edge_ops} "
+            f"forget_ops={digest.forget_ops}"
         )
 
 
@@ -329,11 +330,13 @@ def serve(
     from graph_memory.channels.mcp.server import build_mcp_server, mcp_streamable_app
     from graph_memory.channels.rest.api import create_rest_app
     from graph_memory.context.explain import context_explainer, effectiveness_reporter
+    from graph_memory.context.search import MemorySearchService
     from graph_memory.context.service import ContextCache, MemoryContextProvider
     from graph_memory.mapping.spec import load_spec
     from graph_memory.projector.engine import Projector
     from graph_memory.projector.gateway_clickhouse import ClickHouseGateway
     from graph_memory.signals.api import create_app as create_ingest_app
+    from graph_memory.signals.forget import ForgetService, forget_routes
     from graph_memory.signals.ledger import ClickHouseLedger
     from graph_memory.tenancy.guard import StaticBearerGuard
 
@@ -374,6 +377,14 @@ def serve(
     cache = ContextCache()
     provider = MemoryContextProvider(engine, cache)
     capabilities = tuple(sorted(resolved_spec.capabilities))
+    # Governed forgetting (M4.1): one forget adapter, both channels — the
+    # routes are declared by the mapping spec; the forget event rides the
+    # SAME ledger and the SAME projection as every other signal.
+    instant_forget = ForgetService(ledger, continuous.clock, routes=forget_routes(resolved_spec))
+    # Hybrid ranked search (M4.2): one adapter over the SAME engine read —
+    # lexical in the store, typed ordering, loop weights as the ranking
+    # feature; wired into both channels so parity is structural.
+    instant_search = MemorySearchService(engine)
     # Observability (SPEC §11/R7): spans + metering are day-1 surfaces. The
     # audit stub table lands them durably; exporters attach to the same port.
     span_sink = ClickHouseSpanSink(settings)
@@ -385,7 +396,14 @@ def serve(
     apps = (
         (create_ingest_app(ledger, guard, settings=settings), ingest, "ingest"),
         (
-            create_rest_app(provider, guard, sink=span_sink, metering=metering_counters),
+            create_rest_app(
+                provider,
+                guard,
+                sink=span_sink,
+                metering=metering_counters,
+                forget=instant_forget,
+                search=instant_search,
+            ),
             rest,
             "rest",
         ),
@@ -398,6 +416,8 @@ def serve(
                     signal_schemas={},
                     effectiveness=effectiveness_reporter(resolved_spec, ledger, clock),
                     explainer=context_explainer(engine),
+                    forget=instant_forget,
+                    search=instant_search,
                 )
             ),
             mcp,

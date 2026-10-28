@@ -339,6 +339,15 @@ Cypher, ever); log-safe scrubbing for any operator-controlled name
 7. **Observability:** a scripted eval run produces a hit-rate@k and lift
    report for the reference workload; Langfuse shows the spans locally.
    (e2e + dev command)
+8. **Hybrid retrieval parity** (M4.2 criterion proposal): ranked search is
+   ONE surface behind every channel — MCP and REST render byte-identical
+   items for the same (events, spec, query, clock), ordered by lexical
+   token hits (one shared metric in `core/lexicon.py`), then spec typing,
+   then the decayed loop weight, with the canonical `(kind, target)`
+   tie-break; forget directives govern search exactly like context; vector
+   similarity stays parked behind the `EmbeddingProvider` seam and the
+   default context path + hot-path budget are unchanged. (channel + adapter
+   tests; actionable via `pytest tests/unit/test_hybrid_search.py`)
 
 ---
 

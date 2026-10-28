@@ -5,11 +5,15 @@ Stateless 2026-07-28 JSON mode is the default serving posture
 same core with sessions/SSE. Per-request auth: a transport middleware copies
 the ``Authorization`` header into a contextvar, then each tool resolves it
 through the ``TenantGuard`` — the tenant derives from verified claims only and
-is never a tool argument (SPEC §8/§15). Tool count is capped at four.
+is never a tool argument (SPEC §8/§15). The tool surface stays small and
+bounded (SPEC §17); governed forgetting (research 06, M4.1) rides the
+optional ``MemoryForget`` port and fails as an anticipated tool error when
+unwired.
 """
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import json
 from collections.abc import Awaitable, Callable, Mapping
@@ -26,6 +30,8 @@ from graph_memory.core.ports import (
     ContextExplainer,
     ContextProvider,
     EffectivenessScorer,
+    MemoryForget,
+    MemorySearch,
     TenantGuard,
 )
 from graph_memory.core.types import (
@@ -107,14 +113,17 @@ def build_mcp_server(
     quota: QuotaGuard | None = None,
     effectiveness: EffectivenessScorer | None = None,
     explainer: ContextExplainer | None = None,
+    forget: MemoryForget | None = None,
+    search: MemorySearch | None = None,
 ) -> MCPServer:
     """Assemble the read-model tools around the injected ports (dependency inversion).
 
     ``capabilities`` and ``signal_schemas`` are declared summaries (built at
     the wiring edge from the mapping spec) so this module never imports the
-    mapping package — channels depend on core ports only. ``effectiveness``
-    and ``explainer`` are optional SPEC §5 faces; unwired, their tools fail
-    as anticipated tool errors, never silently.
+    mapping package — channels depend on core ports only. ``effectiveness``,
+    ``explainer``, ``forget`` and ``search`` are optional faces; unwired,
+    their surfaces fail as anticipated tool errors — except search, which
+    degrades to the documented snapshot post-filter, never silently.
     """
     server = MCPServer(
         name=name,
@@ -123,7 +132,8 @@ def build_mcp_server(
             "Read-model tools over a per-user memory graph. Resolve the user's "
             "context by capability, search within it, inspect declared "
             "capabilities, see what signal types the platform maps, explain a "
-            "read's provenance, or read the effectiveness loop's report."
+            "read's provenance, read the effectiveness loop's report, or "
+            "delete user memory under the governed forget flow."
         ),
         middleware=[BearerHeaderTransport()],
     )
@@ -162,8 +172,12 @@ def build_mcp_server(
         name="search_memory",
         title="Search user memory",
         description=(
-            "Bounded keyword search within one user's context for a capability "
-            "(post-filter of the same point-lookup payload; no graph traversal)."
+            "Ranked search over one user's graph. Wired deployments run the "
+            "hybrid kernel — lexical token matching in the store, typed/"
+            "traversal ordering from the mapping spec, and the effectiveness "
+            "loop's weights as a ranking feature; items carry their features. "
+            "Unwired deployments degrade to a bounded keyword post-filter of "
+            "the same point-lookup payload. Never the default context path."
         ),
         structured_output=True,
     )
@@ -177,6 +191,16 @@ def build_mcp_server(
         principal = guard.require_scope(_bearer(), Scope.MEMORY_SEARCH)
         _admit(principal, Scope.MEMORY_SEARCH)
         ref = UserRef(tenant=principal.tenant, user_key=user_key(user))
+        if search is not None:
+            # The adapter's gateway IO stays off the event loop (sync by contract).
+            return await asyncio.to_thread(
+                search.search,
+                principal,
+                ref,
+                query,
+                capability=Capability(capability),
+                limit=limit,
+            )
         ctx = await provider.get(principal, ref, Capability(capability))
         return {
             "capability": str(ctx.capability),
@@ -237,8 +261,9 @@ def build_mcp_server(
         description=(
             "Graph-annotated provenance for one (user, capability): the raw "
             "edge observations under the served snapshot with per-observation "
-            "decayed scores and the mapping signals that produced each kind. "
-            "Requires the explainer to be wired on this deployment."
+            "decayed scores, the mapping signals that produced each kind, and "
+            "any governed forgets that superseded observations at or before "
+            "the read. Requires the explainer to be wired on this deployment."
         ),
         structured_output=True,
     )
@@ -252,6 +277,30 @@ def build_mcp_server(
             )
         ref = UserRef(tenant=principal.tenant, user_key=user_key(user))
         return explainer.explain(principal, ref, Capability(capability))
+
+    @server.tool(
+        name="delete_memory",
+        title="Delete user memory",
+        description=(
+            "Governed forget for one user: tombstone the observations of one "
+            "relation kind — optionally scoped to one target — by emitting an "
+            "auditable ledger event under a memory:write grant. Supersession "
+            "is deterministic, replay-safe, and never a silent row edit."
+        ),
+        structured_output=True,
+    )
+    @_platform_errors
+    async def delete_memory(user: str, kind: str, target: str | None = None) -> dict[str, Json]:
+        principal = guard.require_scope(_bearer(), Scope.MEMORY_WRITE)
+        if forget is None:
+            raise PlatformError(
+                "memory forgetting is not wired on this deployment",
+                details={"tool": "delete_memory", "reason": "not_wired"},
+            )
+        _admit(principal, Scope.MEMORY_WRITE)
+        ref = UserRef(tenant=principal.tenant, user_key=user_key(user))
+        # The adapter's ledger IO stays off the event loop (sync by contract).
+        return await asyncio.to_thread(forget.forget, principal, ref, kind, target)
 
     return server
 

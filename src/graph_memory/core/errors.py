@@ -55,3 +55,20 @@ class QuotaExceeded(PlatformError):
     """Per-tenant admission control refused the request (SPEC §8 quotas)."""
 
     code = "quota_exceeded"
+
+
+class ForgetKindUnknown(PlatformError):
+    """A forget named a relation kind the mapping spec never declared forgettable."""
+
+    code = "forget_kind_unknown"
+
+
+class ForgetTargetMismatch(PlatformError):
+    """A forget's target shape does not match the declared forget rule.
+
+    Kind-wide rules take no target (wholesale kind supersession); scoped
+    rules require the concrete target. The mismatch is refused so the
+    tombstone that lands can never mean something else than declared.
+    """
+
+    code = "forget_target_mismatch"

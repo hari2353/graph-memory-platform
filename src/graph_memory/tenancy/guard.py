@@ -31,7 +31,7 @@ class StaticBearerGuard:
             token: tenant_id(name) for token, name in tokens.items()
         }
         self._scopes: frozenset[Scope] = scopes or frozenset(
-            {Scope.SIGNALS_WRITE, Scope.CONTEXT_READ, Scope.MEMORY_SEARCH}
+            {Scope.SIGNALS_WRITE, Scope.CONTEXT_READ, Scope.MEMORY_SEARCH, Scope.MEMORY_WRITE}
         )
 
     def require_scope(self, credential: str, needed: Scope) -> Principal:

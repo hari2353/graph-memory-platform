@@ -210,3 +210,122 @@ test_gateway_swap_live.py (-m live); platforms gates re-run: 210 offline ok,
   ClickGraph resolves node joins by key VALUE, so multi-tenant Cypher needs
   the tenant property on every matched variable or lookalike keys leak
   across tenants.
+
+## M4 — market refresh (docs/research/06): parity practices + the unclaimed loop
+
+Recorded 2026-10-27 from `docs/research/06-market-refresh-2026-10.md`;
+priority order below. M4.1 landed 2026-10-27 (offline-gated like M0–M3);
+M4.2–M4.6 are unbuilt — each task lands offline-gated like M0–M3.
+
+- [x] Task: governed forgetting + user memory controls (M4.1, P0)
+  - Acceptance: a forget is a ledger event (a signal family declares `forgets:`
+    directives — kind-wide or `{template}`-scoped); projector applies
+    bi-temporal supersession scoped to (tenant, user, kind, target or
+    kind-wide) — pure, convergent, replay-safe; MCP `delete_memory` + REST
+    `POST /v1/forget/{user}` behind a new coarse `memory:write` scope; span +
+    metering (`forget` event) emit per call; market floor: view/edit/delete
+    expectations (research 06, governance).
+  - Verify: 238 passed / 10 skipped offline (`pytest -m "not live"`); replay
+    convergence holds WITH forget flows under every batch permutation +
+    duplicates (`test_incremental_convergence_under_any_batch_ordering…`);
+    divergence control proves removing the forget changes the output
+    (`test_counterfactual_replay_dropping_the_forget_event_diverges`);
+    explain_context surfaces tombstone provenance; REST+MCP forget surfaces
+    round-trip into the read model; tenant-from-bearer isolation unchanged;
+    `ruff check/format`, `mypy --strict src tests` (96 files), `platform bench
+    hotpath --p99-budget 1s` PASSED (p99 0.33ms), `platform bench cost` in
+    budget.
+  - Files: src/graph_memory/{core/types,core/errors,core/ports}.py,
+    src/graph_memory/mapping/{spec,compiler}.py,
+    src/graph_memory/projector/{gateway,gateway_clickhouse,ddl,engine}.py,
+    src/graph_memory/signals/{forget,envelope}.py, settings.py,
+    src/graph_memory/channels/{mcp/server.py,rest/api.py},
+    src/graph_memory/context/explain.py, src/graph_memory/ops/cli.py,
+    src/graph_memory/observability/{metering,observer}.py,
+    src/graph_memory/tenancy/guard.py, tests/unit/test_forget_{mapping,
+    projector,channels}.py, tests/fixtures/mapping_with_forget.yaml
+  - Notes: design decision — a forget is an OVERLAY directive row keyed
+    (tenant, user, kind, target|None, forget_at), never a state mutation of
+    edge rows; visibility is the pure predicate `observation_is_dead`
+    (equal instants die; tie-free), so directives are replay-idempotent and
+    deliberately skip rebuild staging (ClickHouse `gm_forgets` mirrors this;
+    `target_any` flag encodes kind-wide). Deviations from research 06 §M4.1:
+    REST is `POST /v1/forget/{user}` (path user, consistent with context
+    endpoints) — sketch said `POST /v1/forget` with user in body;
+    correlation_id-scoped forgetting is DEFERRED (envelope v1 has no
+    correlation_id; kind/target scoping shipped). Channel parity on the
+    forget surface is covered by per-channel round-trip tests, not yet a
+    shared parity harness leg (test_channel_parity.py untouched).
+- [x] Task: hybrid retrieval in one store (M4.2, P1)
+  - Acceptance: ranked search = CH full-text + typed/traversal ordering +
+    loop-weight ranking feature (competitors have none), behind the same
+    point-lookup SLA discipline; vector optionally behind an
+    EmbeddingProvider port (local ONNX), never on the default context path.
+  - Verify: 253 passed / 10 skipped offline (`pytest -m "not live"`, was
+    238); 15 new tests in `tests/unit/test_hybrid_search.py` cover the
+    shared lexicon (bounded deterministic tokens + ONE `lexical_hits`
+    metric), the pure kernel `(lexical desc, typed desc, loop desc, kind,
+    target)` ordering with tie-breaks + browse mode + node-text traversal
+    hits, adapter behavior (grouping end-to-end, loop-weight overrides
+    FLIP the ranking, tenant/capability errors, limit clamped 1..25,
+    forget tombstones govern search + replay-convergence identity),
+    channel parity (MCP == REST byte-identical via fixed clock), scope
+    403/auth 401/unknown-capability 404/cross-user isolation, unwired REST
+    → anticipated `not_wired` (MCP fallback covered by
+    `test_mcp_channel.py` unchanged); `ruff check/format`, `mypy --strict
+    src tests` (99 files), `platform bench hotpath --p99-budget 1s` PASSED
+    (p99 0.35ms vs 0.33ms before — search is off the hot path), `platform
+    bench cost` unchanged (0.977 TB/mo).
+  - Files: src/graph_memory/core/{lexicon,ports}.py (new lexicon + ports),
+    src/graph_memory/projector/{gateway,gateway_clickhouse}.py
+    (`search_edges`: in-memory client metric; CH `positionCaseInsensitive`
+    SQL pushdown, dead filtering client-side),
+    src/graph_memory/context/search.py (rank_search kernel +
+    MemorySearchService adapter), src/graph_memory/channels/
+    {mcp/server.py,rest/api.py}, src/graph_memory/observability/metering.py
+    (`search` event), src/graph_memory/ops/cli.py, docs/SPEC.md §16.8,
+    tests/unit/test_hybrid_search.py
+  - Notes: deviations from research 06 lever 2 as sketched — the shipped
+    lexical metric is the DETERMINISTIC case-insensitive substring hit
+    count (BM25-style scoring parked; clickhouse can add BM25 without
+    changing the kernel contract since tokens + metric stay in core), and
+    the `EmbeddingProvider` port is defined but UNWIRED (no ONNX dep; the
+    vector leg is a documented seam, not code). MCP keeps the tool
+    name/args and degrades to the documented snapshot post-filter when
+    unwired; REST adds `GET /v1/search/{user}` with span
+    `gmp.channel.rest.search` + metering `search` row. Search is per-user
+    point work (decayed_score at one injected instant, bounded ≤25) and
+    never the default context assembly path.
+- [ ] Task: OP-Bench-style over-personalization guard + external benchmark
+    harness strap (M4.3, P1)
+  - Acceptance: loop OFF == no-loop baseline (existing §16.1 machinery);
+    loop ON beats baseline AND does not degrade cold/fresh cohorts
+    (over-personalization guard, research 06 benchmark chapter).
+  - Verify: divergence test extended with a cold-cohort leg; harness matrix
+    published from eval fixtures (LongMemEval-style corpus replay through
+    our ingest as message signals is the P2 follow-up).
+  - Files: src/graph_memory/evals/{harness.py}, tests/integration/*
+- [ ] Task: interop reach — TS SDK + OpenCode/Claude Code MCP plugin recipes
+    (M4.4, P2)
+  - Acceptance: agents mount the platform as memory from the two hosts whose
+    plugins competitors already ship (research 06, reach section).
+  - Verify: documented recipes against our own MCP surface (6 tools),
+    parity checklist; TS SDK thin facade mirroring channels/sdk.py contract.
+  - Files: docs/interop/*, channels/sdk.py reference, supersedes the old
+    backlog line "TS SDK; optional embedding/semantic-search adapter".
+- [ ] Task: export/portability API (M4.5, P2)
+  - Acceptance: `GET /v1/export/{user}` over the read model +
+    ledger-scoped history for GDPR portability; span + metering trace.
+  - Verify: unit + parity + tenant-isolation tests.
+  - Files: src/graph_memory/channels/rest/*, tests/unit/test_rest_channel*.py
+- [ ] Task: precompute + prewarm path (M4.6, P2)
+  - Acceptance: CH-materialized per-(user,capability) payloads refreshed on
+    the 1s projection tick (staged-rebuild semantics reused);
+    `POST /v1/prefetch` warm-on-login with hit-rate metering;
+    proposal gate: context payload token budget (target ≤ ~2K) asserted in
+    the bench suite.
+  - Verify: staged-rebuild tests extended (no half-built reads),
+    hotpath p99 ≤1s, cost recompute ±15%, prefetch hit-rate counter.
+  - Files: src/graph_memory/projector/gateway*.py, context/*,
+    ops/{bench.py,cli.py}, supersedes the recorded backlog item
+    "profile_snapshots/user_adjacency_rollup CH materialization".

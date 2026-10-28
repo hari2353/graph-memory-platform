@@ -25,13 +25,18 @@ from clickhouse_connect.driver.client import Client
 from graph_memory.chclient import bind_thread_local
 from graph_memory.chclient import default_client as default_client  # re-export (live tests)
 from graph_memory.core.types import TenantId, UserKey
-from graph_memory.mapping.compiler import EdgeOp, NodeOp
+from graph_memory.mapping.compiler import EdgeOp, ForgetOp, NodeOp
 from graph_memory.projector.ddl import build_graph_ddl
-from graph_memory.projector.gateway import EdgeRow, NodeRow
+from graph_memory.projector.gateway import (
+    EdgeRow,
+    NodeRow,
+    observation_is_dead,
+)
 from graph_memory.settings import Settings
 
 _NODES_COLUMNS = ("tenant_id", "key", "labels", "props_json")
 _EDGES_COLUMNS = ("tenant_id", "user_key", "kind", "target", "weight", "half_life_days", "valid_at")
+_FORGETS_COLUMNS = ("tenant_id", "user_key", "kind", "target", "target_any", "forget_at")
 
 
 def _aware(value: object) -> datetime:
@@ -50,11 +55,13 @@ class ClickHouseGateway:
         database: str | None = None,
         nodes_table: str | None = None,
         edges_table: str | None = None,
+        forgets_table: str | None = None,
         client_factory: Callable[[Settings], Client] = default_client,
     ) -> None:
         self._database = database or settings.clickhouse_database
         self._nodes_table = nodes_table or settings.nodes_table
         self._edges_table = edges_table or settings.edges_table
+        self._forgets_table = forgets_table or settings.forgets_table
         self._settings = settings
         self._rebuild_open = False
         self._client_factory = bind_thread_local(client_factory)
@@ -74,9 +81,13 @@ class ClickHouseGateway:
         return self._client()
 
     def ensure_graph_schema(self) -> None:
-        for statement in build_graph_ddl(self._database, self._nodes_table, self._edges_table):
+        for statement in build_graph_ddl(
+            self._database, self._nodes_table, self._edges_table, self._forgets_table
+        ):
             self._client().command(statement)
-        # Rebuild staging partners: the same DDL under the staging names.
+        # Rebuild staging partners: nodes/edges only — the forget overlay is
+        # replay-idempotent (one event => one identity row) so staging adds
+        # no convergence value; readers keep governing by the live overlay.
         for statement in build_graph_ddl(
             self._database,
             self._staging_name(self._nodes_table),
@@ -127,6 +138,30 @@ class ClickHouseGateway:
                 column_names=list(_EDGES_COLUMNS),
             )
 
+    def apply_forgets(self, forgets: Sequence[ForgetOp]) -> None:
+        """Directives land in the live overlay table (never staging).
+
+        Replaying a rebuild re-applies identical directive rows, and
+        ReplacingMergeTree collapses them on their identity — so the overlay
+        converges without participating in the EXCHANGE TABLES swap.
+        """
+        rows = []
+        for op in forgets:
+            wide = op.target is None
+            target = "" if wide else op.target
+            flag = 0 if wide else 1
+            rows.append((op.tenant, op.user, op.kind, target, flag, op.forget_at))
+        if rows:
+            self._client().insert(
+                self._target_forgets(),
+                rows,
+                column_names=list(_FORGETS_COLUMNS),
+            )
+
+    def _target_forgets(self) -> str:
+        """The overlay is always written published-side, even mid-rebuild."""
+        return f"{self._database}.{self._forgets_table}"
+
     def observations(self, tenant: TenantId, user: UserKey) -> list[EdgeRow]:
         result = self._client().query(
             f"SELECT tenant_id, user_key, kind, target, weight, half_life_days, valid_at "
@@ -135,7 +170,7 @@ class ClickHouseGateway:
             "ORDER BY kind ASC, target ASC, valid_at ASC",
             parameters={"tenant": str(tenant), "user": str(user)},
         )
-        return [
+        rows = [
             EdgeRow(
                 tenant=TenantId(str(row[0])),
                 user=UserKey(str(row[1])),
@@ -147,6 +182,77 @@ class ClickHouseGateway:
             )
             for row in result.result_rows
         ]
+        directives = self.forget_directives(tenant, user)
+        return [row for row in rows if not observation_is_dead(row, directives)]
+
+    def search_edges(
+        self, tenant: TenantId, user: UserKey, tokens: Sequence[str]
+    ) -> list[tuple[EdgeRow, int]]:
+        """The in-memory contract, with the token filter pushed into SQL.
+
+        ClickHouse does the case-insensitive substring matching
+        (``positionCaseInsensitive`` per bounded token — the full-text half of
+        research 06 lever 2; BM25-style ranking stays parked behind
+        ``core.ports.EmbeddingProvider`` economics, not on the hot path). One
+        integer per row equals ``core.lexicon.lexical_hits`` exactly, and the
+        forget overlay filtering happens on the client side like everywhere
+        else — one dead-visibility rule, evaluated once.
+        """
+        parameters: dict[str, str] = {"tenant": str(tenant), "user": str(user)}
+        per_token: list[str] = []
+        for index, token in enumerate(tokens):
+            name = f"tok{index}"
+            parameters[name] = str(token)
+            per_token.append(
+                f"(positionCaseInsensitive(concat(kind, ' ', target), {{{name}:String}}) > 0)"
+            )
+        hits_sql = " + ".join(per_token) if per_token else "0"
+        result = self._client().query(
+            f"SELECT tenant_id, user_key, kind, target, weight, half_life_days, valid_at, "
+            f"({hits_sql}) AS token_hits "
+            f"FROM {self._database}.{self._edges_table} FINAL "
+            "WHERE tenant_id = {tenant:String} AND user_key = {user:String} "
+            "ORDER BY kind ASC, target ASC, valid_at ASC",
+            parameters=parameters,
+        )
+        rows = [
+            (
+                EdgeRow(
+                    tenant=TenantId(str(row[0])),
+                    user=UserKey(str(row[1])),
+                    kind=str(row[2]),
+                    target=str(row[3]),
+                    weight=float(row[4]),
+                    half_life_days=float(row[5]),
+                    valid_at=_aware(row[6]),
+                ),
+                int(row[7]),
+            )
+            for row in result.result_rows
+        ]
+        directives = self.forget_directives(tenant, user)
+        return [(row, hits) for row, hits in rows if not observation_is_dead(row, directives)]
+
+    def forget_directives(self, tenant: TenantId, user: UserKey) -> list[ForgetOp]:
+        result = self._client().query(
+            f"SELECT tenant_id, user_key, kind, target, target_any, forget_at "
+            f"FROM {self._database}.{self._forgets_table} FINAL "
+            "WHERE tenant_id = {tenant:String} AND user_key = {user:String} "
+            "ORDER BY kind ASC, target ASC, forget_at ASC",
+            parameters={"tenant": str(tenant), "user": str(user)},
+        )
+        directives = [
+            ForgetOp(
+                tenant=tenant,
+                user=user,
+                kind=str(row[2]),
+                target=None if int(row[4]) == 1 else str(row[3]),
+                forget_at=_aware(row[5]),
+            )
+            for row in result.result_rows
+        ]
+        directives.sort(key=lambda op: (op.kind, op.target or "", op.forget_at))
+        return directives
 
     def nodes_of(self, tenant: TenantId, keys: Sequence[str]) -> list[NodeRow]:
         if not keys:

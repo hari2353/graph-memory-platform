@@ -33,6 +33,7 @@ class Scope(StrEnum):
     SIGNALS_WRITE = "signals:write"
     CONTEXT_READ = "context:read"
     MEMORY_SEARCH = "memory:search"
+    MEMORY_WRITE = "memory:write"
     ADMIN = "platform:admin"
 
 

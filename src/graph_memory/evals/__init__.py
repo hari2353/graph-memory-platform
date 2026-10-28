@@ -5,6 +5,7 @@ from graph_memory.evals.harness import (
     counterfactual_replay,
     hit_rate_at_k,
     lift,
+    over_personalization_probe,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "counterfactual_replay",
     "hit_rate_at_k",
     "lift",
+    "over_personalization_probe",
 ]
