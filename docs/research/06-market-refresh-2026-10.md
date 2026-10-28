@@ -149,6 +149,16 @@ Levers to implement, each falsifiable and slotted behind existing gates:
    through our own ingest as message signals; **OP-Bench-style over-personalization
    probe** reusing the divergence machinery (loop OFF must equal baseline; loop ON must
    beat baseline AND not degrade cold/fresh cohorts); publish the matrix.
+   - **Landed 2026-10-28** (see tasks/todo.md M4.3): the probe IS shipped as
+     `graph_memory.evals.over_personalization_probe` — a deterministic JSON matrix over
+     BOTH regimes (no-loop baseline vs ticked loop rows), with warm/cold cohorts as the
+     falsifiable split: warm diverges and lifts (0.5→1.0 warm hit-rate, `warm_tops_
+     mutually_distinct`), cold cohorts keep byte-identical tops (`cold_degraded_
+     cohorts` empty ⇒ verdict `no-over-personalization`), and an `override_rows`
+     negative-control seam lets CI inject a leaky row set to prove the instrument
+     fails. The LongMemEval-style external corpus reload remains the recorded P2
+     follow-up (deliberate — ingest-shaped corpus replay is gated behind M4.5/M4.6
+     surface changes).
 4. **M4.4 Interop reach (P2)** — TS SDK parity + OpenCode/Claude Code MCP plugin
    recipes; documented against our own MCP surface.
 5. **M4.5 Export/portability API (P2)** — `GET /v1/export/{user}` over the read model

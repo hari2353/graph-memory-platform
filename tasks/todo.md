@@ -296,15 +296,38 @@ M4.2–M4.6 are unbuilt — each task lands offline-gated like M0–M3.
     `gmp.channel.rest.search` + metering `search` row. Search is per-user
     point work (decayed_score at one injected instant, bounded ≤25) and
     never the default context assembly path.
-- [ ] Task: OP-Bench-style over-personalization guard + external benchmark
+- [x] Task: OP-Bench-style over-personalization guard + external benchmark
     harness strap (M4.3, P1)
   - Acceptance: loop OFF == no-loop baseline (existing §16.1 machinery);
     loop ON beats baseline AND does not degrade cold/fresh cohorts
     (over-personalization guard, research 06 benchmark chapter).
-  - Verify: divergence test extended with a cold-cohort leg; harness matrix
-    published from eval fixtures (LongMemEval-style corpus replay through
-    our ingest as message signals is the P2 follow-up).
-  - Files: src/graph_memory/evals/{harness.py}, tests/integration/*
+  - Verify: 256 passed / 10 skipped offline (was 253); divergence fixture
+    extended with TWO cold cohorts — user-c1 (its own unscored cohort-c)
+    and user-n1 (recos omit the cohort attribute → the "" route, the
+    leak-prone default) under the SAME identical skill gaps; 3 new tests:
+    `test_cold_cohorts_never_move_under_the_loop` (loop tops for cold users
+    byte-identical to their OWN baseline tops; tick scores ONLY cohort-a/-b),
+    `test_over_personalization_probe_publishes_the_matrix` (deterministic
+    matrix: warm cohorts diverge pairwise, cold cohorts untouched, warm
+    hit-rate 0.5→1.0 = §16.1 lift, cold hit-rate equal in both regimes,
+    verdict `no-over-personalization`, re-run byte-identical),
+    `test_probe_flags_a_cohort_leak_as_over_personalization` (negative
+    control via a caller-injected buggy row set sharing the "" route:
+    cold "" cohort degrades → verdict flips to `over-personalized` — the
+    instrument provably FAILS when a writer leaks); `ruff`, `mypy --strict
+    src tests`, hotpath p99 0.34ms PASSED, cost unchanged.
+  - Files: src/graph_memory/evals/{harness,__init__}.py
+    (`over_personalization_probe` + `ProbeCell`, JSON-stable matrix with
+    warm/cold cells, per-regime hit-rates all/warm/cold,
+    `override_rows` negative-control seam), 
+    tests/integration/test_effectiveness_divergence.py
+  - Notes: harness MATRIX published from eval fixtures per todo; the
+    LongMemEval-style external corpus replay stays the recorded P2
+    follow-up (per todo text). Semantic honesty in the matrix: a warm
+    cohort whose baseline tie-break already agrees with its evidence shows
+    zero per-regime movement (`cold_degraded_cohorts` / `warm_diverged_
+    cohorts` are per-regime deltas) — the pairwise §16.1 divergence rides
+    `warm_tops_mutually_distinct`.
 - [ ] Task: interop reach — TS SDK + OpenCode/Claude Code MCP plugin recipes
     (M4.4, P2)
   - Acceptance: agents mount the platform as memory from the two hosts whose

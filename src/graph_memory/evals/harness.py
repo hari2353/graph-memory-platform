@@ -261,10 +261,19 @@ def over_personalization_probe(
         "hit_rate": {
             "baseline": {
                 "all": baseline_rate,
+                "warm": regime_hit_rate(baseline_engine, warm_needles),
                 "cold": regime_hit_rate(baseline_engine, cold_needles),
             },
-            "loop": {"all": loop_rate, "cold": regime_hit_rate(loop_engine, cold_needles)},
+            "loop": {
+                "all": loop_rate,
+                "warm": regime_hit_rate(loop_engine, warm_needles),
+                "cold": regime_hit_rate(loop_engine, cold_needles),
+            },
         },
         "beat_baseline": loop_rate > baseline_rate,
+        "beat_baseline_warm": (
+            (regime_hit_rate(loop_engine, warm_needles) or 0.0)
+            > (regime_hit_rate(baseline_engine, warm_needles) or 0.0)
+        ),
         "verdict": "over-personalized" if degraded_cold else "no-over-personalization",
     }
