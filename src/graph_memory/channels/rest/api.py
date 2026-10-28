@@ -25,7 +25,14 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from graph_memory.core.errors import PlatformError
-from graph_memory.core.ports import ContextProvider, MemoryExport, MemoryForget, MemorySearch, TenantGuard
+from graph_memory.core.ports import (
+    ContextProvider,
+    MemoryExport,
+    MemoryForget,
+    MemoryPrefetch,
+    MemorySearch,
+    TenantGuard,
+)
 from graph_memory.core.types import (
     Capability,
     Json,
@@ -48,6 +55,12 @@ class ForgetRequest(BaseModel):
 
     kind: str
     target: str | None = None
+
+
+class PrefetchBody(BaseModel):
+    """The warm-on-login body: capabilities to prebuild (default all)."""
+
+    capabilities: list[str] | None = None
 
 
 def _bearer_from(authorization: str | None) -> str:
@@ -134,6 +147,7 @@ def create_rest_app(
     forget: MemoryForget | None = None,
     search: MemorySearch | None = None,
     export: MemoryExport | None = None,
+    prefetch: MemoryPrefetch | None = None,
 ) -> FastAPI:
     """Assemble the REST channel around injected ports (no framework leakage).
 
@@ -146,6 +160,8 @@ def create_rest_app(
     ranked-retrieval port (research 06 lever 2, M4.2); unwired, ``GET
     /v1/search`` likewise fails as an anticipated error. ``export`` is the
     GDPR portability port (research 06, M4.5); unwired, ``GET /v1/export``
+    fails as an anticipated error. ``prefetch`` is the warm-on-login port
+    (research 06 lever 3, M4.6); unwired, ``POST /v1/prefetch`` likewise
     fails as an anticipated error.
     """
     app = FastAPI(title="graph-memory-platform/rest", version="0.1.0")
@@ -423,6 +439,147 @@ def create_rest_app(
                             "scope": str(Scope.MEMORY_SEARCH),
                             "user": user,
                             "query_len": len(q),
+                            "outcome": error_code or "success",
+                        },
+                    )
+                )
+
+    @app.get("/v1/export/{user}")
+    async def export_user(
+        user: str,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> JSONResponse:
+        """GDPR portability: the read model + the user's OWN event history.
+
+        Tenant from the credential; the payload is the union of the served
+        point reads (never a shadow format) plus their bounded ledger
+        history. Metering ticks one ``export`` row per admitted call; the
+        span carries the build stages for audit.
+        """
+        started = time.perf_counter()
+        principal = None
+        error_code: str | None = None
+        stages: dict[str, Json] = {}
+        try:
+            stage_start = time.perf_counter()
+            principal = guard.require_scope(_bearer_from(authorization), Scope.CONTEXT_READ)
+            stages["authn"] = (time.perf_counter() - stage_start) * 1000.0
+            if quota is not None:
+                stage_start = time.perf_counter()
+                quota.admit(principal, Scope.CONTEXT_READ)
+                stages["admission"] = (time.perf_counter() - stage_start) * 1000.0
+            if export is None:
+                raise PlatformError(
+                    "export is not wired on this deployment",
+                    details={"endpoint": "/v1/export", "reason": "not_wired"},
+                )
+            stage_start = time.perf_counter()
+            result = await asyncio.to_thread(
+                export.export,
+                principal,
+                UserRef(principal.tenant, user_key(user)),
+            )
+            stages["export_build"] = (time.perf_counter() - stage_start) * 1000.0
+            if metering is not None:
+                metering.record(principal.tenant, "rest", "export")
+            return JSONResponse(content=result, status_code=200)
+        except PlatformError as exc:
+            error_code = exc.code
+            if exc.code == "quota_exceeded" and metering is not None and principal is not None:
+                metering.record(principal.tenant, "rest", "throttled")
+            raise HTTPException(status_code=_status_for(exc), detail=exc.to_payload()) from exc
+        finally:
+            if sink is not None:
+                sink.append(
+                    SpanStub(
+                        name="gmp.channel.rest.export",
+                        tenant=(principal.tenant if principal is not None else TenantId("unknown")),
+                        at=datetime.now(tz=UTC),
+                        duration_ms=(time.perf_counter() - started) * 1000.0,
+                        attributes={
+                            "stages_ms": stages,
+                            "scope": str(Scope.CONTEXT_READ),
+                            "user": user,
+                            "outcome": error_code or "success",
+                        },
+                    )
+                )
+
+    @app.post("/v1/prefetch/{user}")
+    async def prefetch_user(
+        user: str,
+        body: PrefetchBody,
+        authorization: Annotated[str | None, Header()] = None,
+        idempotency_key: Annotated[str | None, Header()] = None,
+    ) -> JSONResponse:
+        """Warm-on-login (research 06 lever 3): prebuilt payloads, hit-rate in.
+
+        Reads only — installs the same docs a later ``GET /v1/context``
+        serves. Metering is PAIR-grained: ``prefetch`` counts warmed
+        pairs (all of them) and ``prefetch_cold`` the pairs the safety
+        net had to build, so the metering table alone proves the
+        precompute hit-rate lift. The span carries the same number for
+        the request's audit trail.
+        """
+        started = time.perf_counter()
+        principal = None
+        error_code: str | None = None
+        stages: dict[str, Json] = {}
+        hit_rate: Json | None = None
+        try:
+            stage_start = time.perf_counter()
+            principal = guard.require_scope(_bearer_from(authorization), Scope.CONTEXT_READ)
+            stages["authn"] = (time.perf_counter() - stage_start) * 1000.0
+            if quota is not None:
+                stage_start = time.perf_counter()
+                quota.admit(principal, Scope.CONTEXT_READ)
+                stages["admission"] = (time.perf_counter() - stage_start) * 1000.0
+            if prefetch is None:
+                raise PlatformError(
+                    "prefetch is not wired on this deployment",
+                    details={"endpoint": "/v1/prefetch", "reason": "not_wired"},
+                )
+            stage_start = time.perf_counter()
+            result = await asyncio.to_thread(
+                prefetch.prefetch,
+                principal,
+                UserRef(principal.tenant, user_key(user)),
+                body.capabilities,
+            )
+            stages["prewarm"] = (time.perf_counter() - stage_start) * 1000.0
+            hit_rate = result["hit_rate"]
+            if metering is not None and isinstance(result["requested"], int):
+                metering.add(principal.tenant, "rest", "prefetch", result["requested"])
+                if isinstance(result["safety_net_builds"], int):
+                    metering.add(
+                        principal.tenant, "rest", "prefetch_cold", result["safety_net_builds"]
+                    )
+            # Idempotency-Key: replays return the stored prewarm report.
+            if idempotency_key is not None:
+                key = (f"{principal.tenant}/{user}", idempotency_key)
+                expiry, stored = _replay.get(key, (0.0, result))
+                if expiry > time.monotonic():
+                    return JSONResponse(content=stored, headers={"Idempotency-Replayed": "true"})
+                _replay[key] = (time.monotonic() + _IDEMPOTENCY_TTL_S, result)
+            return JSONResponse(content=result, status_code=200)
+        except PlatformError as exc:
+            error_code = exc.code
+            if exc.code == "quota_exceeded" and metering is not None and principal is not None:
+                metering.record(principal.tenant, "rest", "throttled")
+            raise HTTPException(status_code=_status_for(exc), detail=exc.to_payload()) from exc
+        finally:
+            if sink is not None:
+                sink.append(
+                    SpanStub(
+                        name="gmp.channel.rest.prefetch",
+                        tenant=(principal.tenant if principal is not None else TenantId("unknown")),
+                        at=datetime.now(tz=UTC),
+                        duration_ms=(time.perf_counter() - started) * 1000.0,
+                        attributes={
+                            "stages_ms": stages,
+                            "scope": str(Scope.CONTEXT_READ),
+                            "user": user,
+                            "hit_rate": hit_rate,
                             "outcome": error_code or "success",
                         },
                     )

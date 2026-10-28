@@ -336,11 +336,35 @@ M4.2–M4.6 are unbuilt — each task lands offline-gated like M0–M3.
     parity checklist; TS SDK thin facade mirroring channels/sdk.py contract.
   - Files: docs/interop/*, channels/sdk.py reference, supersedes the old
     backlog line "TS SDK; optional embedding/semantic-search adapter".
-- [ ] Task: export/portability API (M4.5, P2)
+- [x] Task: export/portability API (M4.5, P2)
   - Acceptance: `GET /v1/export/{user}` over the read model +
     ledger-scoped history for GDPR portability; span + metering trace.
-  - Verify: unit + parity + tenant-isolation tests.
-  - Files: src/graph_memory/channels/rest/*, tests/unit/test_rest_channel*.py
+  - Verify: 262 passed / 10 skipped offline (was 256); 6 new tests in
+    tests/unit/test_rest_channel_export.py — adapter payload = union of
+    point reads + oldest-first bounded history (no co-user leaks),
+    honest truncation via the +1 read probe at `max_events`,
+    `TenantMismatch` on a foreign-tenant UserRef + user-2 exports ONLY
+    their own events, REST round-trip parity (HTTP json == adapter
+    payload byte-equal) with metering row `("rest","export")` == 1 and
+    span `gmp.channel.rest.export`, scope denial 403 / bogus bearer
+    401 / unwired 500 `platform_error` `reason=not_wired` (mirrors
+    forget), cross-tenant bearer sees ONLY its own (empty) state for
+    the same user key; `memory` slot parity vs served point read.
+    ruff + `mypy --strict src tests` clean; hotpath p99 0.29ms
+    PASSED; cost unchanged 0.977 TB/mo.
+  - Files: src/graph_memory/core/ports.py (`MemoryExport` protocol),
+    src/graph_memory/context/{export,__init__}.py (`ExportService`,
+    engine.snapshot union + `read_events` history, `max_events=1000`,
+    `_history_record` envelope-face copy), channels/rest/api.py
+    (`export=` port, `GET /v1/export/{user}`, span
+    `gmp.channel.rest.export`, metering `"export"`, unwired →
+    anticipated 500 `not_wired`), observability/metering.py
+    (Literal + `"export"`), ops/cli.py (`instant_export` wired in
+    `serve`), tests/unit/test_rest_channel_export.py
+  - Notes: portability-as-READ, never a DB dump — the payload is the
+    same read model the channels serve (adapter==REST json equality
+    test), one-over-probe keeps `history_truncated` honest in the
+    payload itself; sync adapter run via `asyncio.to_thread`.
 - [ ] Task: precompute + prewarm path (M4.6, P2)
   - Acceptance: CH-materialized per-(user,capability) payloads refreshed on
     the 1s projection tick (staged-rebuild semantics reused);

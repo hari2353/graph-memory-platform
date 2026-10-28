@@ -5,11 +5,19 @@ through the REAL provider — engine compile → snapshot → single-flight
 cache), ``p99`` must stay under the budget (default ``1s``). Regression =
 red build. Runs on the in-memory tier by construction — it measures the hot
 path's algorithmic latency, not a network round-trip.
+
+The payload-token gate (M4.6, research 06 lever 5): Mem0's 6.7–7.0K tokens
+per retrieved context is the industry's uncontrolled figure; our bounded
+``top_k`` payloads must stay under the proposal budget (default ~2K
+tokens) — measured on the same synthetic profile through the real
+provider, with the documented 4-chars-per-token estimate (no tokenizer on
+the hot path; the estimate is the falsifiable proxy the gate asserts).
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass
 
@@ -105,6 +113,66 @@ def _percentile(sorted_ms: list[float], pct: float) -> float:
         return 0.0
     rank = min(len(sorted_ms) - 1, max(0, int(round(pct / 100 * len(sorted_ms)))))
     return sorted_ms[rank]
+
+
+def estimate_tokens(text: str) -> int:
+    """The documented token estimate: ~4 characters per token (no tokenizer).
+
+    Cheap and order-stable; the gate asserts against this proxy, never
+    against a model's true count — the honest unit is "estimated tokens".
+    """
+    return max(1, (len(text) + 3) // 4)
+
+
+@dataclass(frozen=True)
+class PayloadBudgetReport:
+    """The token-budget gate's outcome: worst payload vs the proposal cap."""
+
+    samples: int
+    max_tokens: int
+    budget_tokens: float
+
+    @property
+    def passed(self) -> bool:
+        return self.max_tokens <= self.budget_tokens
+
+    def render(self) -> str:
+        return (
+            f"PAYLOAD bench: samples={self.samples} max_tokens={self.max_tokens} "
+            f"budget={self.budget_tokens:.0f} "
+            f"-> {'PASSED' if self.passed else 'FAILED'}"
+        )
+
+
+async def run_payload_budget_bench(
+    *,
+    users: int = 30,
+    budget_tokens: float = 2000.0,
+) -> PayloadBudgetReport:
+    """Assert every served context payload stays under the token budget."""
+    provider = await asyncio.to_thread(build_hotpath_profile, users)
+
+    def serve_all() -> list[int]:
+        async def collect() -> list[int]:
+            tokens: list[int] = []
+            for index in range(users):
+                ref = UserRef(
+                    tenant=_PRINCIPAL.tenant,
+                    user_key=user_key(f"user-{index % users:04d}"),
+                )
+                ctx = await provider.get(_PRINCIPAL, ref, Capability("skills"))
+                text = json.dumps(ctx.payload, sort_keys=True)
+                tokens.append(estimate_tokens(text))
+            return tokens
+
+        return asyncio.run(collect())
+
+    tokens = await asyncio.to_thread(serve_all)
+    return PayloadBudgetReport(
+        samples=len(tokens),
+        max_tokens=max(tokens),
+        budget_tokens=budget_tokens,
+    )
 
 
 _PRINCIPAL = Principal(

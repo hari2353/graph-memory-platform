@@ -128,6 +128,21 @@ class MemoryExport(Protocol):
     def export(self, principal: Principal, user: UserRef) -> dict[str, Json]: ...
 
 
+class MemoryPrefetch(Protocol):
+    """Warm-on-login (research 06 lever 3, M4.6): prebuilt payloads into cache.
+
+    Reads only — it installs docs the context provider would otherwise
+    build on demand; the tenant rides the verified principal and the
+    payload set is the same point reads the provider serves. The returned
+    dict is the hit-rate evidence (prebuilt-row pulls vs safety-net
+    builds), JSON-stable like the other port results.
+    """
+
+    def prefetch(
+        self, principal: Principal, user: UserRef, capabilities: Sequence[Capability] | None
+    ) -> dict[str, Json]: ...
+
+
 class EmbeddingProvider(Protocol):
     """Optional vector similarity seam (research 06 lever 2, M4.2).
 

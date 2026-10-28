@@ -127,6 +127,11 @@ class Projector:
         """Read-only clock view (provenance adapters reuse it)."""
         return self._clock
 
+    @property
+    def ledger(self) -> LedgerRepository:
+        """Read-only ledger view (the precompute pass derives tenants from it)."""
+        return self._ledger
+
     def set_overrides(self, overrides: Mapping[tuple[str, str, str], float]) -> None:
         """Refresh the loop's weight rows for the NEXT pass (continuous loop).
 

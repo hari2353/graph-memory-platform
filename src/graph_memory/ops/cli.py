@@ -330,6 +330,8 @@ def serve(
     from graph_memory.channels.mcp.server import build_mcp_server, mcp_streamable_app
     from graph_memory.channels.rest.api import create_rest_app
     from graph_memory.context.explain import context_explainer, effectiveness_reporter
+    from graph_memory.context.export import ExportService
+    from graph_memory.context.prefetch import PrewarmService, ProfileMaterializer
     from graph_memory.context.search import MemorySearchService
     from graph_memory.context.service import ContextCache, MemoryContextProvider
     from graph_memory.mapping.spec import load_spec
@@ -385,6 +387,14 @@ def serve(
     # lexical in the store, typed ordering, loop weights as the ranking
     # feature; wired into both channels so parity is structural.
     instant_search = MemorySearchService(engine)
+    # GDPR portability (M4.5): the user's own read model + ledger history,
+    # exported through the REST channel behind the context:read scope.
+    instant_export = ExportService(engine, ledger)
+    # Precompute + prewarm (M4.6): the tick materializes per-(user,
+    # capability) payloads into the published hold-out; the login path
+    # warms the cache FROM those prebuilt rows (hit-rate metered).
+    materializer = ProfileMaterializer(engine)
+    instant_prefetch = PrewarmService(engine, cache, materializer)
     # Observability (SPEC §11/R7): spans + metering are day-1 surfaces. The
     # audit stub table lands them durably; exporters attach to the same port.
     span_sink = ClickHouseSpanSink(settings)
@@ -403,6 +413,8 @@ def serve(
                 metering=metering_counters,
                 forget=instant_forget,
                 search=instant_search,
+                export=instant_export,
+                prefetch=instant_prefetch,
             ),
             rest,
             "rest",
@@ -445,7 +457,7 @@ def serve(
     flushes = _IntervalFlushes(span_sink, metering_counters, metering_table)
     projector = threading.Thread(
         target=_projection_loop,
-        args=(engine, cache, projector_stop, continuous, flushes),
+        args=(engine, cache, projector_stop, continuous, flushes, materializer),
         daemon=True,
     )
     projector.start()
@@ -486,25 +498,33 @@ def _projection_loop(
     stop: threading.Event,
     continuous: ContinuousEffectivenessLoop | None = None,
     flushes: _IntervalFlushes | None = None,
+    precompute: object | None = None,
 ) -> None:
-    """Convergent replay every PROJECTION_INTERVAL_S; cache cleared after."""
+    """Convergent replay every PROJECTION_INTERVAL_S; payloads prebuilt after."""
     import logging
 
+    from graph_memory.context.prefetch import ProfileMaterializer
     from graph_memory.context.service import ContextCache
 
     logger = logging.getLogger("gmp.serve")
     projector = cast("Projector", engine)
     context_cache = cast("ContextCache", cache)
+    materializer = cast("ProfileMaterializer | None", precompute)
     while not stop.wait(PROJECTION_INTERVAL_S):
         # The pass is one deterministic function: tick the ledger, swap the
         # loop's rows in, replay. Rows are byte-convergent for the same
         # (ledger, spec, clock); a failed pass keeps serving the previous
-        # graph and retries next interval.
+        # graph and retries next interval. On success the per-(user,
+        # capability) payloads are rebuilt into the prebuilt hold-out with
+        # staged-rebuild semantics (M4.6) — prewarm pulls read the
+        # published side only, never a half-built state.
         try:
             if continuous is not None:
                 continuous.pass_over(projector)
             else:
                 projector.replay()
+            if materializer is not None:
+                materializer.rebuild()
         except Exception as exc:  # noqa: BLE001 - composition-root resilience
             logger.error("projection pass failed; serving previous graph: %s", exc)
         finally:
@@ -529,6 +549,21 @@ def hotpath(requests: int, users: int, p99_budget: str) -> None:
     report = asyncio.run(
         run_hotpath_bench(users=users, requests=requests, budget_ms=parse_budget(p99_budget))
     )
+    click.echo(report.render())
+    if not report.passed:
+        raise SystemExit(1)
+
+
+@bench.command("token-budget")
+@click.option("--users", default=30, show_default=True)
+@click.option(
+    "--budget", default=2000, show_default=True, help="estimated tokens per payload (proposal)"
+)
+def token_budget(users: int, budget: int) -> None:
+    """Payload token-budget gate (M4.6, lever 5): every payload ≤ ~2K tokens."""
+    from graph_memory.ops.bench import run_payload_budget_bench
+
+    report = asyncio.run(run_payload_budget_bench(users=users, budget_tokens=float(budget)))
     click.echo(report.render())
     if not report.passed:
         raise SystemExit(1)

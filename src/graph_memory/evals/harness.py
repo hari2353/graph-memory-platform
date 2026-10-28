@@ -221,9 +221,7 @@ def over_personalization_probe(
             )
     cold: frozenset[str] = frozenset(cohorts) - warm
     cold_needles = {user: needle for user, needle in needles.items() if cohort_of[user] in cold}
-    warm_needles = {
-        user: needle for user, needle in needles.items() if cohort_of[user] in warm
-    }
+    warm_needles = {user: needle for user, needle in needles.items() if cohort_of[user] in warm}
 
     def regime_hit_rate(engine: Projector, scope: Mapping[UserKey, str]) -> float | None:
         return hit_rate_at_k(engine, tenant, capability, scope, k=k) if scope else None
@@ -254,9 +252,7 @@ def over_personalization_probe(
         "warm_diverged_cohorts": _json_list(
             {cell.cohort for cell in cell_list if cell.warm and cell.diverged}
         ),
-        "warm_tops_mutually_distinct": len(
-            {cell.loop_top for cell in cell_list if cell.warm}
-        ) > 1,
+        "warm_tops_mutually_distinct": len({cell.loop_top for cell in cell_list if cell.warm}) > 1,
         "cold_degraded_cohorts": _json_list(degraded_cold),
         "hit_rate": {
             "baseline": {

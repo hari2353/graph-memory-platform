@@ -12,7 +12,7 @@ serves, so an export is the union of point reads — never a shadow format
 
 from __future__ import annotations
 
-from typing import final
+from typing import cast, final
 
 from graph_memory.core.types import Capability, Json, Principal, UserRef, require_tenant_match
 from graph_memory.projector.engine import Projector
@@ -60,17 +60,16 @@ class ExportService:
         now = self._engine.clock.now()
         capabilities: dict[str, Json] = {}
         for name in sorted(self._engine.spec.capabilities):
-            capabilities[name] = self._engine.snapshot(
-                tenant, user.user_key, Capability(name)
-            ).payload
+            capabilities[name] = cast(
+                "dict[str, Json]",  # JSON-safe by construction (see service.py)
+                self._engine.snapshot(tenant, user.user_key, Capability(name)).payload,
+            )
         # One-over probe so truncation is HONEST in the payload itself.
         events = self._ledger.read_events(
             tenant, user_key=user.user_key, limit=min(self._max_events + 1, _MAX_COUNT_COPY)
         )
         truncated = len(events) > self._max_events
-        history: list[Json] = [
-            _history_record(event) for event in events[: self._max_events]
-        ]
+        history: list[Json] = [_history_record(event) for event in events[: self._max_events]]
         return {
             "user": str(user.user_key),
             "generated_at": now.isoformat(),

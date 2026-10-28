@@ -25,7 +25,9 @@ from graph_memory.chclient import bind_thread_local, default_client
 from graph_memory.core.types import TenantId
 from graph_memory.settings import Settings
 
-MeteringEvent = Literal["requests", "throttled", "forget", "search", "export"]
+MeteringEvent = Literal[
+    "requests", "throttled", "forget", "search", "export", "prefetch", "prefetch_cold"
+]
 
 _DDL = (
     """
@@ -55,6 +57,11 @@ class MeteringCounters:
     def record(self, tenant: TenantId, lane: str, event: MeteringEvent) -> None:
         with self._lock:
             self._counters[(str(tenant), lane, event)] += 1
+
+    def add(self, tenant: TenantId, lane: str, event: MeteringEvent, count: int) -> None:
+        """Batch tick (prefetch metering is PAIR-grained: see context.prefetch)."""
+        with self._lock:
+            self._counters[(str(tenant), lane, event)] += count
 
     def drain(self) -> dict[tuple[str, str, str], int]:
         """Snapshot-and-reset; the flush window's rows."""

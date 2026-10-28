@@ -63,6 +63,19 @@ class ContextCache:
             self._entries[key] = _CacheEntry(doc=doc, expires_at=expires)
             return doc
 
+    def put(self, doc: SnapshotDoc) -> None:
+        """Prewarm hook (M4.6 research lever 3): install a prebuilt doc.
+
+        Same jittered TTL math as the materialized entry above — the only
+        difference is that the doc arrives prebuilt (from the tick's
+        payload store) instead of being built on demand here.
+        """
+        key = (str(doc.tenant), str(doc.user), doc.capability)
+        ttl = doc.max_age_ms / 1_000.0
+        window = ttl * self._jitter
+        expires = time.monotonic() + ttl - (random.uniform(0.0, window) if window else 0.0)
+        self._entries[key] = _CacheEntry(doc=doc, expires_at=expires)
+
     def invalidate(self, key: tuple[str, str, str]) -> None:
         """Reflection-driven invalidation hook (projector may call this)."""
         self._entries.pop(key, None)

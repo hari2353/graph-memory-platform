@@ -163,6 +163,15 @@ Levers to implement, each falsifiable and slotted behind existing gates:
    recipes; documented against our own MCP surface.
 5. **M4.5 Export/portability API (P2)** — `GET /v1/export/{user}` over the read model
    (+ ledger-scoped history) for GDPR portability; span + metering trace.
+   - **Landed 2026-10-28** (see tasks/todo.md M4.5): portability is shipped as a
+     first-class READ — new `MemoryExport` port + `ExportService` adapter (engine
+     snapshot per declared capability = the union of point reads, never a shadow
+     format, plus the user's OWN ledger history bounded oldest-first with honest
+     `history_truncated` via a one-over read), REST `GET /v1/export/{user}` behind
+     `context:read` with span `gmp.channel.rest.export` + metering `"export"`,
+     unwired → anticipated 500 `not_wired`. Confirms research line 63: the market
+     vendors treat export as an audit/data-subject surface, and parity with the
+     served point reads is the test of "no shadow export format".
 6. **M4.6 Precompute + prewarm path (P2)** — lever 1 + 3; gates: hot-path p99, cost,
    plus new token-budget check.
 
