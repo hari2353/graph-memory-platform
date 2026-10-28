@@ -133,6 +133,11 @@ session; each lands green with its acceptance test. Pr/local only until push
   Google Pub/Sub, Kinesis, Redis Streams.
 - Loop 3 strategy-variant A/B framework with pre-registered experiment plans.
 - TS SDK; optional embedding/semantic-search adapter.
+  — Update 2026-10-28: the TS SDK half is SHIPPED as docs/interop/graph-memory.ts
+  (M4.4, the thin facade mirroring channels/sdk.py 1:1). The optional
+  embedding/semantic-search adapter stays open — deliberately: the
+  `EmbeddingProvider` port exists but is UNWIRED (M4.2 decision, no ONNX on
+  the hot path).
 
 ## Spec audit closure (2026-10-21 — full review against SPEC §5/§13/§16)
 
@@ -163,6 +168,9 @@ session; each lands green with its acceptance test. Pr/local only until push
 - Recorded (not built): `profile_snapshots`/`user_adjacency_rollup` CH
   materialization (ContextCache plays the role; backlog), OTLP→Langfuse exporter
   (SpanSink adapter; backlog), `platform dev --embedded` chdb tier (backlog).
+  — Update 2026-10-28: the `profile_snapshots` half is SUPERSEDED by M4.6 (the
+  staged-rebuild payload materializer is landed as the in-process read model;
+  durable CH rows plug the same seam). The rollup/exporter/chdb lines stay backlog.
 
 ## Found live (2026-10-21, usecase drive)
 - [x] Defect: the serve per-interval pass ran eplace_all() as TRUNCATE +
@@ -328,13 +336,33 @@ M4.2–M4.6 are unbuilt — each task lands offline-gated like M0–M3.
     zero per-regime movement (`cold_degraded_cohorts` / `warm_diverged_
     cohorts` are per-regime deltas) — the pairwise §16.1 divergence rides
     `warm_tops_mutually_distinct`.
-- [ ] Task: interop reach — TS SDK + OpenCode/Claude Code MCP plugin recipes
+- [x] Task: interop reach — TS SDK + OpenCode/Claude Code MCP plugin recipes
     (M4.4, P2)
   - Acceptance: agents mount the platform as memory from the two hosts whose
     plugins competitors already ship (research 06, reach section).
-  - Verify: documented recipes against our own MCP surface (6 tools),
-    parity checklist; TS SDK thin facade mirroring channels/sdk.py contract.
-  - Files: docs/interop/*, channels/sdk.py reference, supersedes the old
+  - Verify: documented recipes against our own MCP surface — **7 tools**
+    (the row's "(6 tools)" predates M4.2; the live surface is
+    get_context, search_memory, list_capabilities, get_signal_schema,
+    get_effectiveness, explain_context, delete_memory); every route,
+    scope, port, and dev-token claim in the docs was checked against the
+    shipped source (`channels/mcp/server.py`, `channels/rest/api.py`,
+    `signals/api.py`, `core/types.py Scope`, `settings.py
+    dev_static_tokens`, serve default ports 8001/8002/8003) and the
+    LIVE host docs (OpenCode V2 `mcp.servers.<name>` remote shape +
+    `oauth:false` for header-only creds → tools named
+    `graph_memory_<tool>`; Claude Code `claude mcp add --transport http`
+    + `.mcp.json` where the `type: "http"` field is REQUIRED — a url
+    entry without type is read as stdio and skipped; `streamable-http`
+    accepted as alias). docs/interop/README.md carries the surface
+    parity table (MCP↔REST↔SDK↔scope, honest about channel-only
+    faces) + a 6-point re-run checklist. docs/interop/graph-memory.ts
+    mirrors channels/sdk.py 1:1 (module header carries the parity
+    checklist + translation rules + the channel-only-not-wrapped list:
+    search/forget/export/warm batch); docs-only slice — no runtime code
+    changed, ruff/format/mypy/pytest re-run clean at 276 passed /
+    10 skipped.
+  - Files: docs/interop/{README.md,mcp-opencode.md,mcp-claude-code.md,
+    graph-memory.ts}, channels/sdk.py reference, supersedes the old
     backlog line "TS SDK; optional embedding/semantic-search adapter".
 - [x] Task: export/portability API (M4.5, P2)
   - Acceptance: `GET /v1/export/{user}` over the read model +
@@ -365,14 +393,53 @@ M4.2–M4.6 are unbuilt — each task lands offline-gated like M0–M3.
     same read model the channels serve (adapter==REST json equality
     test), one-over-probe keeps `history_truncated` honest in the
     payload itself; sync adapter run via `asyncio.to_thread`.
-- [ ] Task: precompute + prewarm path (M4.6, P2)
+- [x] Task: precompute + prewarm path (M4.6, P2)
   - Acceptance: CH-materialized per-(user,capability) payloads refreshed on
     the 1s projection tick (staged-rebuild semantics reused);
     `POST /v1/prefetch` warm-on-login with hit-rate metering;
     proposal gate: context payload token budget (target ≤ ~2K) asserted in
     the bench suite.
-  - Verify: staged-rebuild tests extended (no half-built reads),
-    hotpath p99 ≤1s, cost recompute ±15%, prefetch hit-rate counter.
-  - Files: src/graph_memory/projector/gateway*.py, context/*,
-    ops/{bench.py,cli.py}, supersedes the recorded backlog item
-    "profile_snapshots/user_adjacency_rollup CH materialization".
+  - Verify: 276 passed / 10 skipped offline (was 262); 14 new tests —
+    materializer publishes every (user × capability) cell byte-equal to
+    engine.snapshot, a failed rebuild NEVER publishes half-built rows
+    (staged hold-out dropped, old set keeps serving; gateway semantics
+    reused), rebuild deterministic under the injected clock, the 1s
+    `_projection_loop` refreshes the prebuilt tier each pass,
+    prewarm serves prebuilt rows + warms the cache (provider.get() ==
+    engine payload, generated_at from the prebuilt doc) with
+    `hit_rate 1.0` / safety-net path reports `hit_rate 0.0` and meters
+    cold builds, defaults warm every declared capability,
+    CapabilityUnknown + TenantMismatch boundaries; REST
+    `POST /v1/prefetch/{user}` round-trip == adapter report verbatim,
+    pair-grained metering `("rest","prefetch")` + `prefetch_cold` provable
+    from the durable table, span `gmp.channel.rest.prefetch` carries
+    `hit_rate`, Idempotency-Key replay returns the stored report,
+    403 scope_denied / 401 bogus / 500 unwired `not_wired`, cross-tenant
+    bearer warms ONLY its own empty view; token-budget bench
+    (`estimate_tokens` 4-chars proxy) PASSes real payloads at 71 tokens
+    vs the 2000 budget and flips red at a tiny budget. ruff + mypy
+    --strict clean; hotpath p99 0.32ms PASSED; cost unchanged
+    0.977 TB/mo (±15% of ref 1.07).
+  - Files: src/graph_memory/context/prefetch.py (`ProfileMaterializer`
+    staged-rebuild payload store + `PrewarmService` hit-rate prewarm),
+    context/service.py (`ContextCache.put` prewarm hook), projector/
+    engine.py (read-only `ledger` view), core/ports.py (`MemoryPrefetch`
+    protocol), channels/rest/api.py (`prefetch=` port,
+    `POST /v1/prefetch/{user}`, PrefetchBody, pair-grained metering,
+    span + Idempotency-Key, unwired → anticipated 500 `not_wired`),
+    observability/metering.py (Literal + `"prefetch"`/`"prefetch_cold"`,
+    `MeteringCounters.add`), ops/cli.py (serve wiring: materializer +
+    prewarm in `create_rest_app`, `_projection_loop` rebuilds the
+    prebuilt tier after each passing pass), ops/bench.py
+    (`estimate_tokens` + `run_payload_budget_bench`), CLI new
+    `platform bench token-budget`; tests: tests/unit/
+    test_precompute_prewarm.py, test_rest_channel_prewarm.py,
+    test_bench.py
+  - Notes: levers 1+3 of research 06; the payload store is the
+    in-process adapter with the gateway's staged-rebuild contract
+    (published-only reads) — the durable CH `profile_snapshots` row
+    table stays the recorded live-tier follow-up behind the SAME seam
+    (this supersedes the recorded backlog item — the materializer is
+    the read-model role InMemory today, CH rows plug the same seam when
+    the live tier turns it on); MeteringEvent registry grew by
+    `"prefetch"`+`"prefetch_cold"` (PAIR-grained, documented).

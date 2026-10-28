@@ -91,6 +91,14 @@ Levers to implement, each falsifiable and slotted behind existing gates:
    tick (protected staged-rebuild semantics already shipped for CH tables); single-flight
    cache becomes a safety net only. This is the biggest SLA lever for the live tier —
    read path becomes one prebuilt-row fetch.
+   - **Landed 2026-10-28** (see tasks/todo.md M4.6): `ProfileMaterializer`
+     (context/prefetch.py) rebuilds per-(user × capability) payload rows on every 1s
+     `_projection_loop` pass with the gateway's staged-rebuild contract — stage into a
+     hold-out, publish by pointer swap, a failed pass never publishes → readers fetch
+     published rows only. Determinism rides the engine's injected Clock
+     (`engine.ledger.read-only` view added). Prewarm pulls read prebuilt rows first;
+     the engine build is the safety net; the durable CH `profile_snapshots` row table
+     plugs the same seam when the live tier enables it (recorded follow-up).
 2. **Hybrid retrieval without an embedding service on the hot path**: ClickHouse full-text
    (BM25-able) + typed/traversal ordering + **loop weights as a ranking feature** (no
    competitor has loop-evidence ranking); vector similarity parked behind an
@@ -98,10 +106,24 @@ Levers to implement, each falsifiable and slotted behind existing gates:
    ad-hoc search surface, never the default context assembly.
 3. **Warm-on-login** (Zep graph.warm analog): `POST /v1/prefetch` (`Idempotency-Key`)
    warms the cache at session open; metering counters prove hit-rate lift.
+   - **Landed 2026-10-28** (see tasks/todo.md M4.6): `PrewarmService` implements the
+     new `MemoryPrefetch` port; REST `POST /v1/prefetch/{user}` behind `context:read`
+     (Idempotency-Key replay supported) warms the ContextCache from the prebuilt rows.
+     Metering is PAIR-grained — `"prefetch"` warmed pairs + `"prefetch_cold"`
+     safety-net builds — so the durable metering table alone proves the lift; span
+     `gmp.channel.rest.prefetch` carries `hit_rate`. Hit-rate 1.0 == every pair
+     came off the prebuilt tier; 0.0 == everything built on demand.
 4. **Async inserts + schema-only cost levers** (TTL/codecs already in `signals/ddl.py`);
    dev profile adds `async_insert=1`; the cost gate recomputes unchanged.
 5. **Token-budget gate** (proposal for a new falsifiable criterion): context payload
-   tokens per retrieval view, Mem0's 6.7–7.0K is the industry's uncontrolled figure); enforced in `platform bench hotpath`/evals.
+   tokens per retrieval view, Mem0's 6.7–7.0K is the industry's uncontrolled figure;
+   enforced in `platform bench hotpath`/evals.
+   - **Landed 2026-10-28** (see tasks/todo.md M4.6): `platform bench token-budget`
+     asserts every served payload ≤ the proposal budget (default 2000 estimated
+     tokens) on the synthetic hotpath profile — estimate is the documented
+     4-chars/token proxy (no tokenizer on the hot path; the honest unit is
+     "estimated tokens"). Real payloads measure at ~71 tokens; the gate flips red
+     under a tiny budget (test).
 6. **Shard-by-tenant ops doc**: brokers already order by `gmp.signals.<tenant>` /
    user partition key; CH cluster keys by tenant hash — ops posture doc + compose
    profile for the 3-node cluster, no code change.
@@ -161,6 +183,14 @@ Levers to implement, each falsifiable and slotted behind existing gates:
      surface changes).
 4. **M4.4 Interop reach (P2)** — TS SDK parity + OpenCode/Claude Code MCP plugin
    recipes; documented against our own MCP surface.
+   - **Landed 2026-10-28** (see tasks/todo.md M4.4): docs/interop/ — README
+     (surface parity table MCP↔REST↔SDK↔scope + 6-point re-run checklist),
+     OpenCode + Claude Code mount recipes verified against the LIVE host docs
+     and the shipped source (7 MCP tools — the pre-M4.2 count in this row was
+     stale), and graph-memory.ts, the TS facade mirroring channels/sdk.py 1:1
+     with the parity checklist in its module header. Channel-only surfaces
+     (search/forget/export/warm batch) are documented as not-wrapped — the
+     parity table is the contract, not marketing.
 5. **M4.5 Export/portability API (P2)** — `GET /v1/export/{user}` over the read model
    (+ ledger-scoped history) for GDPR portability; span + metering trace.
    - **Landed 2026-10-28** (see tasks/todo.md M4.5): portability is shipped as a
