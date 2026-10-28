@@ -23,7 +23,6 @@ from collections.abc import Sequence
 from typing import final
 
 from graph_memory.context.service import ContextCache
-from graph_memory.core.errors import CapabilityUnknown
 from graph_memory.core.types import (
     Capability,
     Json,
@@ -33,7 +32,7 @@ from graph_memory.core.types import (
     UserRef,
     require_tenant_match,
 )
-from graph_memory.projector.engine import Projector, SnapshotDoc
+from graph_memory.projector.engine import CapabilityUnknown, Projector, SnapshotDoc
 
 
 @final
@@ -53,10 +52,6 @@ class ProfileMaterializer:
         self._engine = engine
         self._published: dict[tuple[str, str, str], SnapshotDoc] = {}
         self._staged: dict[tuple[str, str, str], SnapshotDoc] | None = None
-
-    def _target(self) -> dict[tuple[str, str, str], SnapshotDoc]:
-        """Writes land in the open rebuild's staging, else the published side."""
-        return self._published if self._staged is None else self._staged
 
     def rebuild(self) -> int:
         """One replaceable rebuild: stage every (user × capability), publish.

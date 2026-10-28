@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from click.testing import CliRunner
 
-from graph_memory.ops.bench import parse_budget, run_hotpath_bench
+from graph_memory.ops.bench import (
+    estimate_tokens,
+    parse_budget,
+    run_hotpath_bench,
+    run_payload_budget_bench,
+)
 from graph_memory.ops.cli import bench
 
 
@@ -13,6 +18,28 @@ def test_parse_budget_units() -> None:
     assert parse_budget("500ms") == 500.0
     assert parse_budget("0.75") == 750.0
     assert parse_budget(" 2S ".strip().casefold()) == 2000.0
+
+
+def test_estimate_tokens_is_the_documented_four_chars_proxy() -> None:
+    assert estimate_tokens("") == 1
+    assert estimate_tokens("x" * 3) == 1
+    assert estimate_tokens("x" * 4) == 1
+    assert estimate_tokens("x" * 5) == 2
+    assert estimate_tokens("x" * 4000) == 1000
+
+
+async def test_payload_budget_bench_passes_the_proposal_gate() -> None:
+    report = await run_payload_budget_bench(users=4, budget_tokens=2000.0)
+    assert report.samples == 4
+    assert report.max_tokens <= 2000.0  # bounded top_k, tiny payloads
+    assert report.passed
+    assert "PASSED" in report.render()
+
+
+async def test_tiny_token_budget_flips_the_gate_red() -> None:
+    report = await run_payload_budget_bench(users=2, budget_tokens=0.5)
+    assert not report.passed
+    assert "FAILED" in report.render()
 
 
 async def test_hotpath_bench_reports_and_passes_the_default_gate() -> None:
@@ -36,3 +63,6 @@ def test_cli_gate_exit_codes() -> None:
     )
     assert green.exit_code == 0
     assert "PASSED" in green.output
+    tokens = runner.invoke(bench, ["token-budget", "--users", "4"])
+    assert tokens.exit_code == 0
+    assert "PAYLOAD bench" in tokens.output and "PASSED" in tokens.output

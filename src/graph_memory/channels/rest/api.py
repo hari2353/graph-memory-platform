@@ -540,11 +540,16 @@ def create_rest_app(
                     details={"endpoint": "/v1/prefetch", "reason": "not_wired"},
                 )
             stage_start = time.perf_counter()
+            requested = (
+                None
+                if body.capabilities is None
+                else [Capability(cap) for cap in body.capabilities]
+            )
             result = await asyncio.to_thread(
                 prefetch.prefetch,
                 principal,
                 UserRef(principal.tenant, user_key(user)),
-                body.capabilities,
+                requested,
             )
             stages["prewarm"] = (time.perf_counter() - stage_start) * 1000.0
             hit_rate = result["hit_rate"]
