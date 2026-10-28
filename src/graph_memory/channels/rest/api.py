@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from graph_memory.core.errors import PlatformError
-from graph_memory.core.ports import ContextProvider, MemoryForget, MemorySearch, TenantGuard
+from graph_memory.core.ports import ContextProvider, MemoryExport, MemoryForget, MemorySearch, TenantGuard
 from graph_memory.core.types import (
     Capability,
     Json,
@@ -133,6 +133,7 @@ def create_rest_app(
     metering: MeteringCounters | None = None,
     forget: MemoryForget | None = None,
     search: MemorySearch | None = None,
+    export: MemoryExport | None = None,
 ) -> FastAPI:
     """Assemble the REST channel around injected ports (no framework leakage).
 
@@ -143,7 +144,9 @@ def create_rest_app(
     memory-control port (research 06, M4.1); unwired, ``POST /v1/forget``
     fails as an anticipated error, never silently. ``search`` is the hybrid
     ranked-retrieval port (research 06 lever 2, M4.2); unwired, ``GET
-    /v1/search`` likewise fails as an anticipated error.
+    /v1/search`` likewise fails as an anticipated error. ``export`` is the
+    GDPR portability port (research 06, M4.5); unwired, ``GET /v1/export``
+    fails as an anticipated error.
     """
     app = FastAPI(title="graph-memory-platform/rest", version="0.1.0")
     # Idempotency-Key replay store: (tenant, user, capability, key) -> (expiry, body).

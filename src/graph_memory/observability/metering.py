@@ -25,7 +25,7 @@ from graph_memory.chclient import bind_thread_local, default_client
 from graph_memory.core.types import TenantId
 from graph_memory.settings import Settings
 
-MeteringEvent = Literal["requests", "throttled", "forget", "search"]
+MeteringEvent = Literal["requests", "throttled", "forget", "search", "export"]
 
 _DDL = (
     """

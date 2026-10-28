@@ -116,6 +116,18 @@ class MemorySearch(Protocol):
     ) -> dict[str, Json]: ...
 
 
+class MemoryExport(Protocol):
+    """GDPR portability (research 06, M4.5): one user's read model + history.
+
+    Export is the user's OWN data, read-only: every declared capability's
+    snapshot the read model serves them plus their ledger-scoped event
+    history (bounded, oldest-first). The tenant rides the verified
+    principal exactly like every other read; nothing here mutates state.
+    """
+
+    def export(self, principal: Principal, user: UserRef) -> dict[str, Json]: ...
+
+
 class EmbeddingProvider(Protocol):
     """Optional vector similarity seam (research 06 lever 2, M4.2).
 
