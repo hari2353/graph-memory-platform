@@ -182,7 +182,9 @@ def _start_clickgraph() -> subprocess.Popen[bytes] | None:
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        # typeshed exposes CREATE_NO_WINDOW only on Windows; getattr keeps
+        # mypy --strict quiet on POSIX without changing win32 behavior.
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
     )
     for _ in range(50):
         if process.poll() is not None:
