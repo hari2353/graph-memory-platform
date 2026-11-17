@@ -49,6 +49,24 @@ class EdgeRow:
     valid_at: datetime
 
 
+def observation_visible_at(
+    row: EdgeRow, directives: Sequence[ForgetOp], as_at: datetime
+) -> bool:
+    """Point-in-time visibility (Zep/Graphiti semantics, deterministic):
+    the observation existed by ``as_at`` (``valid_at <= as_at``) and no
+    forget directive that had been issued by ``as_at`` covers it. A forget
+    issued AFTER the slice does not hide the fact — that is the entire
+    point of a historical read."""
+    if row.valid_at > as_at:
+        return False
+    return not any(
+        directive.kind == row.kind
+        and (directive.target is None or directive.target == row.target)
+        and row.valid_at <= directive.forget_at <= as_at
+        for directive in directives
+    )
+
+
 def observation_is_dead(row: EdgeRow, directives: Sequence[ForgetOp]) -> bool:
     """The shared bi-temporal visibility predicate (both backends use it).
 
@@ -142,8 +160,7 @@ class InMemoryGraphGateway:
         for op in forgets:
             self._forgets[(op.tenant, op.user, op.kind, op.target, op.forget_at)] = op
 
-    def observations(self, tenant: TenantId, user: UserKey) -> list[EdgeRow]:
-        directives = self.forget_directives(tenant, user)
+    def _rows_for(self, tenant: TenantId, user: UserKey) -> list[EdgeRow]:
         rows = [
             EdgeRow(
                 tenant=op.tenant,
@@ -158,7 +175,22 @@ class InMemoryGraphGateway:
             if t == tenant and u == user
         ]
         rows.sort(key=lambda row: (row.kind, row.target, row.valid_at, row.weight))
+        return rows
+
+    def observations(self, tenant: TenantId, user: UserKey) -> list[EdgeRow]:
+        directives = self.forget_directives(tenant, user)
+        rows = self._rows_for(tenant, user)
         return [row for row in rows if not observation_is_dead(row, directives)]
+
+    def observations_at(
+        self, tenant: TenantId, user: UserKey, as_at: datetime
+    ) -> list[EdgeRow]:
+        directives = self.forget_directives(tenant, user)
+        rows = self._rows_for(tenant, user)
+        return [
+            row for row in rows
+            if observation_visible_at(row, directives, as_at)
+        ]
 
     def search_edges(
         self, tenant: TenantId, user: UserKey, tokens: Sequence[str]

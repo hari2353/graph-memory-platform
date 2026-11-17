@@ -57,6 +57,12 @@ class QuotaExceeded(PlatformError):
     code = "quota_exceeded"
 
 
+class InvalidRequest(PlatformError):
+    """Caller passed a malformed argument (not an envelope problem)."""
+
+    code = "invalid_request"
+
+
 class ForgetKindUnknown(PlatformError):
     """A forget named a relation kind the mapping spec never declared forgettable."""
 

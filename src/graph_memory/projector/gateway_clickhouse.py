@@ -28,6 +28,7 @@ from graph_memory.core.types import TenantId, UserKey
 from graph_memory.mapping.compiler import EdgeOp, ForgetOp, NodeOp
 from graph_memory.projector.ddl import build_graph_ddl
 from graph_memory.projector.gateway import (
+    observation_visible_at,
     EdgeRow,
     NodeRow,
     observation_is_dead,
@@ -162,15 +163,20 @@ class ClickHouseGateway:
         """The overlay is always written published-side, even mid-rebuild."""
         return f"{self._database}.{self._forgets_table}"
 
-    def observations(self, tenant: TenantId, user: UserKey) -> list[EdgeRow]:
+    def _edge_rows(self, tenant: TenantId, user: UserKey, *, as_at: str | None) -> list[EdgeRow]:
+        where = "WHERE tenant_id = {tenant:String} AND user_key = {user:String} "
+        parameters: dict[str, str] = {"tenant": str(tenant), "user": str(user)}
+        if as_at is not None:
+            where += "AND valid_at <= {as_at:DateTime} "
+            parameters["as_at"] = as_at
         result = self._client().query(
             f"SELECT tenant_id, user_key, kind, target, weight, half_life_days, valid_at "
             f"FROM {self._database}.{self._edges_table} FINAL "
-            "WHERE tenant_id = {tenant:String} AND user_key = {user:String} "
+            f"{where}"
             "ORDER BY kind ASC, target ASC, valid_at ASC",
-            parameters={"tenant": str(tenant), "user": str(user)},
+            parameters=parameters,
         )
-        rows = [
+        return [
             EdgeRow(
                 tenant=TenantId(str(row[0])),
                 user=UserKey(str(row[1])),
@@ -182,8 +188,23 @@ class ClickHouseGateway:
             )
             for row in result.result_rows
         ]
+
+    def observations(self, tenant: TenantId, user: UserKey) -> list[EdgeRow]:
+        rows = self._edge_rows(tenant, user, as_at=None)
         directives = self.forget_directives(tenant, user)
         return [row for row in rows if not observation_is_dead(row, directives)]
+
+    def observations_at(
+        self, tenant: TenantId, user: UserKey, as_at: datetime
+    ) -> list[EdgeRow]:
+        rows = self._edge_rows(
+            tenant, user, as_at=as_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+        )
+        directives = self.forget_directives(tenant, user)
+        return [
+            row for row in rows
+            if observation_visible_at(row, directives, as_at)
+        ]
 
     def search_edges(
         self, tenant: TenantId, user: UserKey, tokens: Sequence[str]

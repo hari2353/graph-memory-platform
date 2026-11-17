@@ -138,6 +138,92 @@ def replay_run(mapping_path: str, from_iso: str | None, backend: str) -> None:
 
 
 @cli.group()
+def audit() -> None:
+    """Human-facing memory audit: read what the agent knows, and what changed."""
+
+
+@audit.command("inspect-user")
+@click.option("--tenant", required=True)
+@click.option("--user", required=True)
+@click.option(
+    "--backend", type=click.Choice(["clickhouse", "memory"]),
+    default="clickhouse", show_default=True,
+)
+def audit_inspect_user(tenant: str, user: str, backend: str) -> None:
+    """Render one user's projected memory as bounded Markdown.
+
+    Active facts with validity instants and weights, plus the forget ledger
+    (what was superseded, when) — so silence is never mistaken for absence.
+    """
+    from pathlib import Path
+
+    from graph_memory.context.inspect import inspect_user
+    from graph_memory.core.types import TenantId, UserKey
+    from graph_memory.mapping.spec import load_spec
+    from graph_memory.projector.engine import Projector
+
+    settings = Settings()
+    ledger = _ledger(backend, settings)
+    if backend == "memory":
+        from graph_memory.projector.gateway import InMemoryGraphGateway
+
+        gateway = InMemoryGraphGateway()
+    else:
+        from graph_memory.projector.gateway_clickhouse import ClickHouseGateway
+
+        gateway = ClickHouseGateway(settings)
+        gateway.ensure_graph_schema()
+    spec = load_spec(Path(_default_mapping()).read_text(encoding="utf-8"))
+    engine = Projector(spec, ledger, gateway, SystemClock())
+    if backend != "memory":
+        engine.replay()
+    click.echo(inspect_user(engine, TenantId(tenant), UserKey(user)))
+
+
+@audit.command("user-history")
+@click.option("--tenant", required=True)
+@click.option("--user", required=True)
+@click.option("--since", default=None, help="only changes with occurred_at >= SINCE (ISO datetime)")
+@click.option("--limit", type=int, default=200, show_default=True)
+@click.option(
+    "--backend", type=click.Choice(["clickhouse", "memory"]),
+    default="clickhouse", show_default=True,
+)
+def audit_user_history(tenant: str, user: str, since: str | None, limit: int, backend: str) -> None:
+    """One user's change timeline from the append-only ledger (ingestion order)."""
+    from datetime import datetime
+
+    from graph_memory.context.timeline import user_history
+    from graph_memory.core.types import TenantId, UserKey
+
+    settings = Settings()
+    ledger = _ledger(backend, settings)
+    since_dt = None
+    if since is not None:
+        since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+    entries = user_history(
+        ledger, TenantId(tenant), UserKey(user), since=since_dt, limit=limit
+    )
+    if not entries:
+        click.echo("no history for this user (or --since filtered everything)")
+    for entry in entries:
+        click.echo(
+            f"#{entry.sequence} {entry.signal} occurred={entry.occurred_at.isoformat()}"
+            f" ingested={entry.ingested_at.isoformat()} key={entry.dedup_key}"
+        )
+
+
+def _default_mapping() -> str:
+    """The reference mapping for audit commands when no path is given."""
+    import graph_memory
+
+    return str(
+        Path(graph_memory.__file__).parent.parent.parent
+        / "tests" / "fixtures" / "mapping_skill_loop.yaml"
+    )
+
+
+@cli.group()
 def tenancy() -> None:
     """Tenant metadata ops (SPEC §8): metadata rows only, no per-tenant DDL."""
 

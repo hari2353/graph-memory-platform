@@ -264,6 +264,39 @@ class Projector:
         rows = [
             row for row in self._gateway.observations(tenant, user) if row.kind in rule.relations
         ]
+        return self._materialize(tenant, user, capability, rule, rows, now)
+
+    def snapshot_at(
+        self, tenant: TenantId, user: UserKey, capability: Capability,
+        *, as_at: datetime,
+    ) -> SnapshotDoc:
+        """Point-in-time snapshot (Zep/Graphiti semantics): the memory as it
+        looked at ``as_at`` — facts first observed later are absent, and a
+        forget issued after ``as_at`` does not hide the fact. Default
+        ``snapshot`` stays byte-identical; historical reads bypass the cache."""
+        rule = self._spec.capabilities.get(capability)
+        if rule is None:
+            raise CapabilityUnknown(
+                "capability is not declared by the mapping spec",
+                details={"capability": capability},
+            )
+        rows = [
+            row for row in self._gateway.observations_at(tenant, user, as_at)
+            if row.kind in rule.relations
+        ]
+        return self._materialize(tenant, user, capability, rule, rows, as_at)
+
+    def _materialize(
+        self,
+        tenant: TenantId,
+        user: UserKey,
+        capability: Capability,
+        rule: object,
+        rows: list,
+        now: datetime,
+    ) -> SnapshotDoc:
+        """Shared snapshot builder — identical grouping/scoring for now-reads
+        and historical reads; one definition of what an item is."""
         scores: dict[tuple[str, str], float] = {}
         for row in rows:
             key = (row.kind, row.target)

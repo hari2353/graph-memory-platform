@@ -89,6 +89,8 @@ def _status_for(exc: PlatformError) -> int:
         return 401 if details.get("reason") == "unknown_credential" else 403
     if exc.code == "capability_unknown":
         return 404
+    if exc.code == "invalid_request":
+        return 422
     if exc.code in {"tenant_revoked", "tenant_suspended", "tenant_not_found"}:
         return 403
     return _STATUS_HINTS.get(exc.code, 500)
@@ -169,7 +171,8 @@ def create_rest_app(
     _replay: dict[tuple[str, str], tuple[float, dict[str, Json]]] = {}
 
     async def _context_of(
-        authorization: str | None, scope: Scope, user: str, capability: str
+        authorization: str | None, scope: Scope, user: str, capability: str,
+        as_of: str | None = None,
     ) -> UserContext:
         """One checked read: guard first, tenant from claims only (SPEC §8/§15)."""
         started = time.perf_counter()
@@ -185,8 +188,11 @@ def create_rest_app(
                 quota.admit(principal, scope)
                 stages["admission"] = (time.perf_counter() - stage_start) * 1000.0
             stage_start = time.perf_counter()
+            from graph_memory.channels.mcp.server import _parse_as_of
+
             context = await provider.get(
-                principal, UserRef(principal.tenant, user_key(user)), Capability(capability)
+                principal, UserRef(principal.tenant, user_key(user)),
+                Capability(capability), as_of=_parse_as_of(as_of),
             )
             stages["lookup_assemble"] = (time.perf_counter() - stage_start) * 1000.0
             if metering is not None:
@@ -219,10 +225,13 @@ def create_rest_app(
     async def get_context(
         user: str,
         capability: str,
+        as_of: str | None = None,
         if_none_match: Annotated[str | None, Header()] = None,
         authorization: Annotated[str | None, Header()] = None,
     ) -> Response:
-        ctx = await _context_of(authorization, Scope.CONTEXT_READ, user, capability)
+        ctx = await _context_of(
+            authorization, Scope.CONTEXT_READ, user, capability, as_of=as_of
+        )
         generated = ctx.generated_at.isoformat()
         etag = _etag_for(ctx.cache_scope, generated, ctx.payload)
         if if_none_match == etag:
@@ -260,7 +269,9 @@ def create_rest_app(
         cursor: str | None = None,
         authorization: Annotated[str | None, Header()] = None,
     ) -> JSONResponse:
-        ctx = await _context_of(authorization, Scope.CONTEXT_READ, user, capability)
+        ctx = await _context_of(
+            authorization, Scope.CONTEXT_READ, user, capability
+        )
         try:
             page_size = max(1, min(limit, _MAX_ITEM_LIMIT))
             ranked = _ranked_items(ctx.payload)
@@ -296,7 +307,9 @@ def create_rest_app(
         authorization: Annotated[str | None, Header()] = None,
         idempotency_key: Annotated[str | None, Header()] = None,
     ) -> JSONResponse:
-        ctx = await _context_of(authorization, Scope.CONTEXT_READ, user, capability)
+        ctx = await _context_of(
+            authorization, Scope.CONTEXT_READ, user, capability
+        )
         body: dict[str, Json] = {
             "materialized": True,
             "cache_scope": ctx.cache_scope,

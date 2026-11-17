@@ -21,3 +21,6 @@ Thumbs.db
 .DS_Store
 .idea/
 .vscode/
+
+# stray self-copy left by an earlier copy mishap; never track
+/graph-memory-platform/

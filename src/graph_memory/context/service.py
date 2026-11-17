@@ -9,6 +9,7 @@ surfaced via ``UserContext.generated_at`` / ``max_age_ms``.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import random
 import time
 from collections.abc import Callable
@@ -92,18 +93,30 @@ class MemoryContextProvider:
         self._engine = engine
         self._cache = cache if cache is not None else ContextCache()
 
-    async def get(self, principal: Principal, user: UserRef, capability: Capability) -> UserContext:
-        """Hot path: verify, then one cached point lookup, then assemble."""
+    async def get(
+        self, principal: Principal, user: UserRef, capability: Capability,
+        *, as_of: datetime | None = None,
+    ) -> UserContext:
+        """Hot path: verify, then one cached point lookup, then assemble.
+        ``as_of`` (optional) makes this a point-in-time read: the memory as
+        it looked at that instant — facts later than ``as_of`` absent, forgets
+        issued after ``as_of`` not applied. Historical reads bypass the cache
+        (they are immutable answers to immutable questions)."""
         require_tenant_match(principal, user)
         if not principal.allows(Scope.CONTEXT_READ):
             raise ScopeDenied(
                 "principal does not carry context:read",
                 details={"needed_scope": Scope.CONTEXT_READ.value},
             )
-        doc = await self._cache.get_or_materialize(
-            (str(user.tenant), str(user.user_key), capability),
-            self._loader(user, capability),
-        )
+        if as_of is not None:
+            doc = self._engine.snapshot_at(
+                user.tenant, user.user_key, capability, as_at=as_of
+            )
+        else:
+            doc = await self._cache.get_or_materialize(
+                (str(user.tenant), str(user.user_key), capability),
+                self._loader(user, capability),
+            )
         return UserContext(
             user=user,
             capability=capability,
