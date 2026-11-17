@@ -44,6 +44,10 @@ python_version = "3.12"
 
 [tool.pytest.ini_options]
 addopts = "-q"
+# a stray self-copy of the repo (graph-memory-platform/graph-memory-platform)
+# sits untracked in some working trees; never collect it — its duplicate
+# module names collide with the real tests
+norecursedirs = [".venv", "graph-memory-platform", "*.egg-info", "build", "dist"]
 markers = [
     "live: requires a real ClickHouse + ClickGraph server (skipped by default)",
 ]
