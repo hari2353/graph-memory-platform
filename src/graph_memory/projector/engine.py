@@ -24,8 +24,8 @@ from graph_memory.core.clock import Clock
 from graph_memory.core.errors import PlatformError
 from graph_memory.core.types import Capability, TenantId, UserKey
 from graph_memory.mapping.compiler import EdgeOp, NodeOp, compile_plan
-from graph_memory.mapping.spec import MappingSpec
-from graph_memory.projector.gateway import GraphGateway
+from graph_memory.mapping.spec import CapabilityRule, MappingSpec
+from graph_memory.projector.gateway import EdgeRow, GraphGateway
 from graph_memory.signals.ledger import LedgerRepository, StoredEvent
 
 _LN2 = log(2.0)
@@ -291,8 +291,8 @@ class Projector:
         tenant: TenantId,
         user: UserKey,
         capability: Capability,
-        rule: object,
-        rows: list,
+        rule: CapabilityRule,
+        rows: list[EdgeRow],
         now: datetime,
     ) -> SnapshotDoc:
         """Shared snapshot builder — identical grouping/scoring for now-reads

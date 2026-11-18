@@ -171,14 +171,14 @@ def test_mcp_get_context_accepts_as_of_and_rejects_garbage() -> None:
     slice; a malformed one is a caller error, never a crash."""
     import asyncio
 
-    from graph_memory.channels.mcp.server import _parse_as_of
+    from graph_memory.context.service import parse_as_of
     from graph_memory.core.errors import InvalidRequest
 
-    parsed = _parse_as_of("2026-06-03T00:00:00Z")
+    parsed = parse_as_of("2026-06-03T00:00:00Z")
     assert parsed is not None and parsed.year == 2026
-    assert _parse_as_of(None) is None
+    assert parse_as_of(None) is None
     try:
-        _parse_as_of("not-a-date")
+        parse_as_of("not-a-date")
     except InvalidRequest as exc:
         assert exc.code == "invalid_request"
     else:

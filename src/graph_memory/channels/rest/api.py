@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from graph_memory.core.errors import PlatformError
+from graph_memory.context.service import parse_as_of
 from graph_memory.core.ports import (
     ContextProvider,
     MemoryExport,
@@ -188,11 +189,9 @@ def create_rest_app(
                 quota.admit(principal, scope)
                 stages["admission"] = (time.perf_counter() - stage_start) * 1000.0
             stage_start = time.perf_counter()
-            from graph_memory.channels.mcp.server import _parse_as_of
-
             context = await provider.get(
                 principal, UserRef(principal.tenant, user_key(user)),
-                Capability(capability), as_of=_parse_as_of(as_of),
+                Capability(capability), as_of=parse_as_of(as_of),
             )
             stages["lookup_assemble"] = (time.perf_counter() - stage_start) * 1000.0
             if metering is not None:

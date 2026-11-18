@@ -34,6 +34,7 @@ from graph_memory.core.ports import (
     MemorySearch,
     TenantGuard,
 )
+from graph_memory.context.service import parse_as_of
 from graph_memory.core.types import (
     Capability,
     Json,
@@ -92,29 +93,6 @@ def _platform_errors(
             raise ToolError(json.dumps(exc.to_payload())) from exc
 
     return wrapper
-
-
-def _parse_as_of(value: str | None):
-    """ISO-8601 point-in-time instant, or None for the default now-read.
-    Anything else is a caller error, surfaced as a platform error."""
-    if value is None:
-        return None
-    from datetime import datetime
-
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError as exc:
-        from graph_memory.core.errors import InvalidRequest
-
-        raise InvalidRequest(
-            "as_of must be an ISO-8601 instant",
-            details={"as_of": value},
-        ) from exc
-    if parsed.tzinfo is None:
-        from datetime import UTC
-
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed
 
 
 def _bearer() -> str:
@@ -182,7 +160,7 @@ def build_mcp_server(
         principal = guard.require_scope(_bearer(), Scope.CONTEXT_READ)
         _admit(principal, Scope.CONTEXT_READ)
         ref = UserRef(tenant=principal.tenant, user_key=user_key(user))
-        as_of_dt = _parse_as_of(as_of)
+        as_of_dt = parse_as_of(as_of)
         ctx = await provider.get(
             principal, ref, Capability(capability), as_of=as_of_dt
         )

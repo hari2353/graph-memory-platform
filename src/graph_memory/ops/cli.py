@@ -146,10 +146,16 @@ def audit() -> None:
 @click.option("--tenant", required=True)
 @click.option("--user", required=True)
 @click.option(
+    "--mapping", "mapping_path", default=None,
+    help="mapping spec YAML path (default: the repo's reference fixture)",
+)
+@click.option(
     "--backend", type=click.Choice(["clickhouse", "memory"]),
     default="clickhouse", show_default=True,
 )
-def audit_inspect_user(tenant: str, user: str, backend: str) -> None:
+def audit_inspect_user(
+    tenant: str, user: str, mapping_path: str | None, backend: str
+) -> None:
     """Render one user's projected memory as bounded Markdown.
 
     Active facts with validity instants and weights, plus the forget ledger
@@ -173,7 +179,8 @@ def audit_inspect_user(tenant: str, user: str, backend: str) -> None:
 
         gateway = ClickHouseGateway(settings)
         gateway.ensure_graph_schema()
-    spec = load_spec(Path(_default_mapping()).read_text(encoding="utf-8"))
+    spec_path = Path(mapping_path) if mapping_path is not None else Path(_default_mapping())
+    spec = load_spec(spec_path.read_text(encoding="utf-8"))
     engine = Projector(spec, ledger, gateway, SystemClock())
     if backend != "memory":
         engine.replay()
@@ -215,6 +222,8 @@ def audit_user_history(tenant: str, user: str, since: str | None, limit: int, ba
 
 def _default_mapping() -> str:
     """The reference mapping for audit commands when no path is given."""
+    from pathlib import Path
+
     import graph_memory
 
     return str(

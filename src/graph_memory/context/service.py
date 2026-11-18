@@ -86,6 +86,27 @@ class ContextCache:
         self._entries.clear()
 
 
+def parse_as_of(value: str | None) -> datetime | None:
+    """ISO-8601 point-in-time instant, or None for the default now-read.
+    Shared by the MCP tool and the REST query param; malformed values are
+    caller errors (InvalidRequest), never crashes."""
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        from graph_memory.core.errors import InvalidRequest
+
+        raise InvalidRequest(
+            "as_of must be an ISO-8601 instant", details={"as_of": value}
+        ) from exc
+    if parsed.tzinfo is None:
+        from datetime import UTC
+
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
 class MemoryContextProvider:
     """implements ``core.ports.ContextProvider`` over the projector."""
 
