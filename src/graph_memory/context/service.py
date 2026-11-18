@@ -9,11 +9,11 @@ surfaced via ``UserContext.generated_at`` / ``max_age_ms``.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import cast
 
 from graph_memory.core.errors import ScopeDenied
@@ -97,9 +97,7 @@ def parse_as_of(value: str | None) -> datetime | None:
     except ValueError as exc:
         from graph_memory.core.errors import InvalidRequest
 
-        raise InvalidRequest(
-            "as_of must be an ISO-8601 instant", details={"as_of": value}
-        ) from exc
+        raise InvalidRequest("as_of must be an ISO-8601 instant", details={"as_of": value}) from exc
     if parsed.tzinfo is None:
         from datetime import UTC
 
@@ -115,8 +113,12 @@ class MemoryContextProvider:
         self._cache = cache if cache is not None else ContextCache()
 
     async def get(
-        self, principal: Principal, user: UserRef, capability: Capability,
-        *, as_of: datetime | None = None,
+        self,
+        principal: Principal,
+        user: UserRef,
+        capability: Capability,
+        *,
+        as_of: datetime | None = None,
     ) -> UserContext:
         """Hot path: verify, then one cached point lookup, then assemble.
         ``as_of`` (optional) makes this a point-in-time read: the memory as
@@ -130,9 +132,7 @@ class MemoryContextProvider:
                 details={"needed_scope": Scope.CONTEXT_READ.value},
             )
         if as_of is not None:
-            doc = self._engine.snapshot_at(
-                user.tenant, user.user_key, capability, as_at=as_of
-            )
+            doc = self._engine.snapshot_at(user.tenant, user.user_key, capability, as_at=as_of)
         else:
             doc = await self._cache.get_or_materialize(
                 (str(user.tenant), str(user.user_key), capability),

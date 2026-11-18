@@ -28,10 +28,10 @@ from graph_memory.core.types import TenantId, UserKey
 from graph_memory.mapping.compiler import EdgeOp, ForgetOp, NodeOp
 from graph_memory.projector.ddl import build_graph_ddl
 from graph_memory.projector.gateway import (
-    observation_visible_at,
     EdgeRow,
     NodeRow,
     observation_is_dead,
+    observation_visible_at,
 )
 from graph_memory.settings import Settings
 
@@ -194,17 +194,12 @@ class ClickHouseGateway:
         directives = self.forget_directives(tenant, user)
         return [row for row in rows if not observation_is_dead(row, directives)]
 
-    def observations_at(
-        self, tenant: TenantId, user: UserKey, as_at: datetime
-    ) -> list[EdgeRow]:
+    def observations_at(self, tenant: TenantId, user: UserKey, as_at: datetime) -> list[EdgeRow]:
         rows = self._edge_rows(
             tenant, user, as_at=as_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
         )
         directives = self.forget_directives(tenant, user)
-        return [
-            row for row in rows
-            if observation_visible_at(row, directives, as_at)
-        ]
+        return [row for row in rows if observation_visible_at(row, directives, as_at)]
 
     def search_edges(
         self, tenant: TenantId, user: UserKey, tokens: Sequence[str]

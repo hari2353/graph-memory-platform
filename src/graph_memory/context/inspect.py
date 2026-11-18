@@ -3,6 +3,7 @@ column every 2026 memory comparison scores. inspect_user renders one
 user's projected memory as bounded Markdown: active facts grouped by
 kind with validity instants and weights, plus the forget ledger (what
 was superseded, when) so silence is never mistaken for absence."""
+
 from __future__ import annotations
 
 from graph_memory.core.types import TenantId, UserKey
@@ -55,12 +56,9 @@ def inspect_user(engine: Projector, tenant: TenantId, user: UserKey) -> str:
         for directive in directives[:_MAX_FORGETS]:
             target = directive.target if directive.target is not None else "(whole kind)"
             lines.append(
-                f"| {directive.kind} | {target}"
-                f" | {directive.forget_at.date().isoformat()} |"
+                f"| {directive.kind} | {target} | {directive.forget_at.date().isoformat()} |"
             )
         if len(directives) > _MAX_FORGETS:
-            lines.append(
-                f"| … | {len(directives) - _MAX_FORGETS} more directives truncated | |"
-            )
+            lines.append(f"| … | {len(directives) - _MAX_FORGETS} more directives truncated | |")
         lines.append("")
     return "\n".join(lines)

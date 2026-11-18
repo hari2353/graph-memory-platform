@@ -146,16 +146,18 @@ def audit() -> None:
 @click.option("--tenant", required=True)
 @click.option("--user", required=True)
 @click.option(
-    "--mapping", "mapping_path", default=None,
+    "--mapping",
+    "mapping_path",
+    default=None,
     help="mapping spec YAML path (default: the repo's reference fixture)",
 )
 @click.option(
-    "--backend", type=click.Choice(["clickhouse", "memory"]),
-    default="clickhouse", show_default=True,
+    "--backend",
+    type=click.Choice(["clickhouse", "memory"]),
+    default="clickhouse",
+    show_default=True,
 )
-def audit_inspect_user(
-    tenant: str, user: str, mapping_path: str | None, backend: str
-) -> None:
+def audit_inspect_user(tenant: str, user: str, mapping_path: str | None, backend: str) -> None:
     """Render one user's projected memory as bounded Markdown.
 
     Active facts with validity instants and weights, plus the forget ledger
@@ -167,9 +169,11 @@ def audit_inspect_user(
     from graph_memory.core.types import TenantId, UserKey
     from graph_memory.mapping.spec import load_spec
     from graph_memory.projector.engine import Projector
+    from graph_memory.projector.gateway import GraphGateway
 
     settings = Settings()
     ledger = _ledger(backend, settings)
+    gateway: GraphGateway
     if backend == "memory":
         from graph_memory.projector.gateway import InMemoryGraphGateway
 
@@ -177,8 +181,9 @@ def audit_inspect_user(
     else:
         from graph_memory.projector.gateway_clickhouse import ClickHouseGateway
 
-        gateway = ClickHouseGateway(settings)
-        gateway.ensure_graph_schema()
+        clickhouse = ClickHouseGateway(settings)
+        clickhouse.ensure_graph_schema()
+        gateway = clickhouse
     spec_path = Path(mapping_path) if mapping_path is not None else Path(_default_mapping())
     spec = load_spec(spec_path.read_text(encoding="utf-8"))
     engine = Projector(spec, ledger, gateway, SystemClock())
@@ -193,8 +198,10 @@ def audit_inspect_user(
 @click.option("--since", default=None, help="only changes with occurred_at >= SINCE (ISO datetime)")
 @click.option("--limit", type=int, default=200, show_default=True)
 @click.option(
-    "--backend", type=click.Choice(["clickhouse", "memory"]),
-    default="clickhouse", show_default=True,
+    "--backend",
+    type=click.Choice(["clickhouse", "memory"]),
+    default="clickhouse",
+    show_default=True,
 )
 def audit_user_history(tenant: str, user: str, since: str | None, limit: int, backend: str) -> None:
     """One user's change timeline from the append-only ledger (ingestion order)."""
@@ -208,9 +215,7 @@ def audit_user_history(tenant: str, user: str, since: str | None, limit: int, ba
     since_dt = None
     if since is not None:
         since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
-    entries = user_history(
-        ledger, TenantId(tenant), UserKey(user), since=since_dt, limit=limit
-    )
+    entries = user_history(ledger, TenantId(tenant), UserKey(user), since=since_dt, limit=limit)
     if not entries:
         click.echo("no history for this user (or --since filtered everything)")
     for entry in entries:
@@ -228,7 +233,9 @@ def _default_mapping() -> str:
 
     return str(
         Path(graph_memory.__file__).parent.parent.parent
-        / "tests" / "fixtures" / "mapping_skill_loop.yaml"
+        / "tests"
+        / "fixtures"
+        / "mapping_skill_loop.yaml"
     )
 
 

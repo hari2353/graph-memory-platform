@@ -9,17 +9,31 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from graph_memory.core.clock import FixedClock
-from graph_memory.core.types import TenantId, UserKey
+from graph_memory.core.types import Capability, TenantId, UserKey
 from graph_memory.mapping.spec import load_spec
-from graph_memory.projector.engine import Projector
+from graph_memory.projector.engine import Projector, SnapshotDoc
 from graph_memory.projector.gateway import InMemoryGraphGateway
 from graph_memory.signals.envelope import Envelope
 from graph_memory.signals.ledger import InMemoryLedger, record_from_envelope
 
 _T = TenantId("acme")
 _U = UserKey("user-1")
+_SKILLS = Capability("skills")
 _FORGET_SPEC = Path(__file__).parent.parent / "fixtures" / "mapping_with_forget.yaml"
 _NOW = datetime(2026, 6, 10, tzinfo=UTC)
+
+
+def _targets(doc: SnapshotDoc) -> list[str]:
+    """Typed view over the doc's JSON payload for assertions."""
+    items = doc.payload["items"]
+    assert isinstance(items, list)
+    targets: list[str] = []
+    for item in items:
+        assert isinstance(item, dict)
+        target = item["target"]
+        assert isinstance(target, str)
+        targets.append(target)
+    return targets
 
 
 def _envelope(event_id: str, type_: str, time_: str, **data: object) -> Envelope:
@@ -39,18 +53,35 @@ def _engine() -> tuple[Projector, InMemoryLedger]:
     spec = load_spec(_FORGET_SPEC.read_text(encoding="utf-8"))
     ledger = InMemoryLedger()
     engine = Projector(spec, ledger, InMemoryGraphGateway(), FixedClock(_NOW))
-    ledger.append([
-        record_from_envelope(_T, _envelope(
-            "e1", "itf.skill_assessed.v1", "2026-06-01T12:00:00.100Z",
-            skill="rust", score=0.8)),
-        # a LATER fact, ingested before 'now' but after the slice
-        record_from_envelope(_T, _envelope(
-            "e2", "itf.skill_assessed.v1", "2026-06-08T12:00:00.100Z",
-            skill="kafka", score=0.9)),
-        # the whole HAS_SKILL kind is forgotten on 06-05 (between the two)
-        record_from_envelope(_T, _envelope(
-            "f1", "itf.forget_all_skills.v1", "2026-06-05T12:00:00.100Z")),
-    ])
+    ledger.append(
+        [
+            record_from_envelope(
+                _T,
+                _envelope(
+                    "e1",
+                    "itf.skill_assessed.v1",
+                    "2026-06-01T12:00:00.100Z",
+                    skill="rust",
+                    score=0.8,
+                ),
+            ),
+            # a LATER fact, ingested before 'now' but after the slice
+            record_from_envelope(
+                _T,
+                _envelope(
+                    "e2",
+                    "itf.skill_assessed.v1",
+                    "2026-06-08T12:00:00.100Z",
+                    skill="kafka",
+                    score=0.9,
+                ),
+            ),
+            # the whole HAS_SKILL kind is forgotten on 06-05 (between the two)
+            record_from_envelope(
+                _T, _envelope("f1", "itf.forget_all_skills.v1", "2026-06-05T12:00:00.100Z")
+            ),
+        ]
+    )
     engine.process_events(ledger.read_events(_T))
     return engine, ledger
 
@@ -58,32 +89,27 @@ def _engine() -> tuple[Projector, InMemoryLedger]:
 # ── point-in-time reads ──────────────────────────────────────────────────────
 def test_historical_slice_resurrects_a_later_forgotten_fact() -> None:
     engine, _ = _engine()
-    now_targets = [
-        item["target"] for item in engine.snapshot(_T, _U, "skills").payload["items"]
-    ]
+    now_targets = _targets(engine.snapshot(_T, _U, _SKILLS))
     assert now_targets == ["skill:kafka"]
     # the 06-05 forget kills only facts known by then: rust (06-01) dies,
     # kafka (06-08) post-dates the forget and survives at 'now'
 
-    slice_doc = engine.snapshot_at(
-        _T, _U, "skills", as_at=datetime(2026, 6, 3, tzinfo=UTC))
-    slice_targets = [item["target"] for item in slice_doc.payload["items"]]
-    assert slice_targets == ["skill:rust"]  # rust was alive on 06-03
+    slice_doc = engine.snapshot_at(_T, _U, _SKILLS, as_at=datetime(2026, 6, 3, tzinfo=UTC))
+    assert _targets(slice_doc) == ["skill:rust"]  # rust was alive on 06-03
 
 
 def test_future_facts_are_absent_from_a_historical_slice() -> None:
     engine, _ = _engine()
-    slice_doc = engine.snapshot_at(
-        _T, _U, "skills", as_at=datetime(2026, 6, 3, tzinfo=UTC))
-    targets = [item["target"] for item in slice_doc.payload["items"]]
+    slice_doc = engine.snapshot_at(_T, _U, _SKILLS, as_at=datetime(2026, 6, 3, tzinfo=UTC))
+    targets = _targets(slice_doc)
     assert "skill:kafka" not in targets  # first observed 06-08
 
 
 def test_snapshot_at_now_equals_the_default_snapshot() -> None:
     engine, _ = _engine()
     assert (
-        engine.snapshot_at(_T, _U, "skills", as_at=_NOW).payload
-        == engine.snapshot(_T, _U, "skills").payload
+        engine.snapshot_at(_T, _U, _SKILLS, as_at=_NOW).payload
+        == engine.snapshot(_T, _U, _SKILLS).payload
     )
 
 
@@ -96,7 +122,7 @@ def test_gateway_observations_at_agrees_with_visibility_predicate() -> None:
         (r.kind, r.target)
         for r in gateway.observations_at(_T, _U, datetime(2026, 6, 3, tzinfo=UTC))
     }
-    assert at_slice == {("HAS_SKILL", "skill:rust")}   # alive before the forget
+    assert at_slice == {("HAS_SKILL", "skill:rust")}  # alive before the forget
 
 
 # ── human-readable memory audit ──────────────────────────────────────────────
@@ -108,24 +134,33 @@ def test_inspect_user_renders_active_memory_and_forget_ledger() -> None:
     spec = load_spec(_FORGET_SPEC.read_text(encoding="utf-8"))
     ledger = InMemoryLedger()
     fresh = Projector(spec, ledger, InMemoryGraphGateway(), FixedClock(_NOW))
-    ledger.append([
-        record_from_envelope(_T, _envelope(
-            "e1", "itf.skill_assessed.v1", "2026-06-01T12:00:00.100Z",
-            skill="rust", score=0.8)),
-    ])
+    ledger.append(
+        [
+            record_from_envelope(
+                _T,
+                _envelope(
+                    "e1",
+                    "itf.skill_assessed.v1",
+                    "2026-06-01T12:00:00.100Z",
+                    skill="rust",
+                    score=0.8,
+                ),
+            ),
+        ]
+    )
     fresh.process_events(ledger.read_events(_T))
 
     markdown = inspect_user(fresh, _T, _U)
     assert "skill:rust" in markdown
     assert "HAS_SKILL" in markdown
-    assert "2026-06-01" in markdown            # validity instant, human-readable
+    assert "2026-06-01" in markdown  # validity instant, human-readable
     assert "# memory audit" in markdown.lower() or "## " in markdown
 
     # the forgotten engine shows the forget ledger, not silent absence
     forgotten_md = inspect_user(engine, _T, _U)
     assert "forget" in forgotten_md.lower()
-    assert "HAS_SKILL" in forgotten_md         # the directive names its kind
-    assert "2026-06-05" in forgotten_md        # and when
+    assert "HAS_SKILL" in forgotten_md  # the directive names its kind
+    assert "2026-06-05" in forgotten_md  # and when
 
 
 def test_inspect_user_output_is_bounded() -> None:
@@ -135,15 +170,53 @@ def test_inspect_user_output_is_bounded() -> None:
     ledger = InMemoryLedger()
     engine = Projector(spec, ledger, InMemoryGraphGateway(), FixedClock(_NOW))
     records = [
-        record_from_envelope(_T, _envelope(
-            f"e{i}", "itf.skill_assessed.v1", "2026-06-01T12:00:00.100Z",
-            skill=f"skill-{i}", score=0.5))
+        record_from_envelope(
+            _T,
+            _envelope(
+                f"e{i}",
+                "itf.skill_assessed.v1",
+                "2026-06-01T12:00:00.100Z",
+                skill=f"skill-{i}",
+                score=0.5,
+            ),
+        )
         for i in range(300)
     ]
     ledger.append(records)
     engine.process_events(ledger.read_events(_T))
     markdown = inspect_user(engine, _T, _U)
-    assert len(markdown) < 20_000               # bounded, not a 300-row dump
+    assert len(markdown) < 20_000  # bounded, not a 300-row dump
+
+
+def test_inspect_user_empty_memory_says_so() -> None:
+    from graph_memory.context.inspect import inspect_user
+
+    spec = load_spec(_FORGET_SPEC.read_text(encoding="utf-8"))
+    engine = Projector(spec, InMemoryLedger(), InMemoryGraphGateway(), FixedClock(_NOW))
+    markdown = inspect_user(engine, _T, _U)
+    assert "_No active facts._" in markdown
+    assert "# Memory audit" in markdown
+
+
+def test_cli_audit_commands_run_offline_on_memory_backend() -> None:
+    from click.testing import CliRunner
+
+    from graph_memory.ops.cli import cli
+
+    runner = CliRunner()
+    inspected = runner.invoke(
+        cli,
+        ["audit", "inspect-user", "--tenant", "acme", "--user", "user-1", "--backend", "memory"],
+    )
+    assert inspected.exit_code == 0, inspected.output
+    assert "# Memory audit" in inspected.output
+
+    history = runner.invoke(
+        cli,
+        ["audit", "user-history", "--tenant", "acme", "--user", "user-1", "--backend", "memory"],
+    )
+    assert history.exit_code == 0, history.output
+    assert "no history for this user" in history.output
 
 
 # ── user change timeline ─────────────────────────────────────────────────────
@@ -154,7 +227,7 @@ def test_user_history_is_ordered_bounded_and_filtered() -> None:
     entries = user_history(ledger, _T, _U)
     assert [e.sequence for e in entries] == sorted(e.sequence for e in entries)
     kinds = {e.signal for e in entries}
-    assert "itf.forget_all_skills.v1" in kinds   # forgets are visible history
+    assert "itf.forget_all_skills.v1" in kinds  # forgets are visible history
     assert "itf.skill_assessed.v1" in kinds
 
     since = user_history(ledger, _T, _U, since=datetime(2026, 6, 6, tzinfo=UTC))
@@ -169,7 +242,6 @@ def test_user_history_is_ordered_bounded_and_filtered() -> None:
 def test_mcp_get_context_accepts_as_of_and_rejects_garbage() -> None:
     """The MCP tool's as_of path: a valid instant gives the historical
     slice; a malformed one is a caller error, never a crash."""
-    import asyncio
 
     from graph_memory.context.service import parse_as_of
     from graph_memory.core.errors import InvalidRequest

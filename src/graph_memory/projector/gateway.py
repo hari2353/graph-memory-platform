@@ -49,9 +49,7 @@ class EdgeRow:
     valid_at: datetime
 
 
-def observation_visible_at(
-    row: EdgeRow, directives: Sequence[ForgetOp], as_at: datetime
-) -> bool:
+def observation_visible_at(row: EdgeRow, directives: Sequence[ForgetOp], as_at: datetime) -> bool:
     """Point-in-time visibility (Zep/Graphiti semantics, deterministic):
     the observation existed by ``as_at`` (``valid_at <= as_at``) and no
     forget directive that had been issued by ``as_at`` covers it. A forget
@@ -98,6 +96,10 @@ class GraphGateway(Protocol):
     def apply_forgets(self, forgets: Sequence[ForgetOp]) -> None: ...
 
     def observations(self, tenant: TenantId, user: UserKey) -> list[EdgeRow]: ...
+
+    def observations_at(
+        self, tenant: TenantId, user: UserKey, as_at: datetime
+    ) -> list[EdgeRow]: ...
 
     def search_edges(
         self, tenant: TenantId, user: UserKey, tokens: Sequence[str]
@@ -182,15 +184,10 @@ class InMemoryGraphGateway:
         rows = self._rows_for(tenant, user)
         return [row for row in rows if not observation_is_dead(row, directives)]
 
-    def observations_at(
-        self, tenant: TenantId, user: UserKey, as_at: datetime
-    ) -> list[EdgeRow]:
+    def observations_at(self, tenant: TenantId, user: UserKey, as_at: datetime) -> list[EdgeRow]:
         directives = self.forget_directives(tenant, user)
         rows = self._rows_for(tenant, user)
-        return [
-            row for row in rows
-            if observation_visible_at(row, directives, as_at)
-        ]
+        return [row for row in rows if observation_visible_at(row, directives, as_at)]
 
     def search_edges(
         self, tenant: TenantId, user: UserKey, tokens: Sequence[str]

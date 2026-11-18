@@ -25,6 +25,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from starlette.applications import Starlette
 
+from graph_memory.context.service import parse_as_of
 from graph_memory.core.errors import PlatformError, ScopeDenied
 from graph_memory.core.ports import (
     ContextExplainer,
@@ -34,7 +35,6 @@ from graph_memory.core.ports import (
     MemorySearch,
     TenantGuard,
 )
-from graph_memory.context.service import parse_as_of
 from graph_memory.core.types import (
     Capability,
     Json,
@@ -154,16 +154,12 @@ def build_mcp_server(
         structured_output=True,
     )
     @_platform_errors
-    async def get_context(
-        user: str, capability: str, as_of: str | None = None
-    ) -> dict[str, Json]:
+    async def get_context(user: str, capability: str, as_of: str | None = None) -> dict[str, Json]:
         principal = guard.require_scope(_bearer(), Scope.CONTEXT_READ)
         _admit(principal, Scope.CONTEXT_READ)
         ref = UserRef(tenant=principal.tenant, user_key=user_key(user))
         as_of_dt = parse_as_of(as_of)
-        ctx = await provider.get(
-            principal, ref, Capability(capability), as_of=as_of_dt
-        )
+        ctx = await provider.get(principal, ref, Capability(capability), as_of=as_of_dt)
         stale_at = ctx.generated_at.timestamp() + ctx.max_age_ms / 1000.0
         return {
             "capability": str(ctx.capability),

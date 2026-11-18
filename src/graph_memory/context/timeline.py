@@ -2,6 +2,7 @@
 this platform's append-only ledger: what changed for one user, in
 ingestion order, bounded. The ledger is the truth; this is a read-only
 projection of it."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,9 +14,9 @@ from graph_memory.signals.ledger import LedgerRepository
 
 @dataclass(frozen=True)
 class TimelineEntry:
-    sequence: int          # ingestion order within this read
-    signal: str            # the signal type that produced the change
-    dedup_key: str         # evidence: which signal exactly
+    sequence: int  # ingestion order within this read
+    signal: str  # the signal type that produced the change
+    dedup_key: str  # evidence: which signal exactly
     occurred_at: datetime  # when it happened (event time)
     ingested_at: datetime  # when the platform learned it
 

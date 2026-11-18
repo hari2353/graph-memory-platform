@@ -267,8 +267,12 @@ class Projector:
         return self._materialize(tenant, user, capability, rule, rows, now)
 
     def snapshot_at(
-        self, tenant: TenantId, user: UserKey, capability: Capability,
-        *, as_at: datetime,
+        self,
+        tenant: TenantId,
+        user: UserKey,
+        capability: Capability,
+        *,
+        as_at: datetime,
     ) -> SnapshotDoc:
         """Point-in-time snapshot (Zep/Graphiti semantics): the memory as it
         looked at ``as_at`` — facts first observed later are absent, and a
@@ -281,7 +285,8 @@ class Projector:
                 details={"capability": capability},
             )
         rows = [
-            row for row in self._gateway.observations_at(tenant, user, as_at)
+            row
+            for row in self._gateway.observations_at(tenant, user, as_at)
             if row.kind in rule.relations
         ]
         return self._materialize(tenant, user, capability, rule, rows, as_at)

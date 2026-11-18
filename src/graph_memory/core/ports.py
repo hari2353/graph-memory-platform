@@ -9,6 +9,7 @@ and access helpers reject cross-tenant references before any adapter IO runs.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Protocol, TypeVar
 
 from graph_memory.core.types import (
@@ -50,7 +51,12 @@ class ContextProvider(Protocol):
     """
 
     async def get(
-        self, principal: Principal, user: UserRef, capability: Capability
+        self,
+        principal: Principal,
+        user: UserRef,
+        capability: Capability,
+        *,
+        as_of: datetime | None = None,
     ) -> UserContext: ...
 
 

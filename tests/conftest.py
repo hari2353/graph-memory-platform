@@ -18,7 +18,7 @@ def _reachable(host: str, port: int, timeout: float = 0.5) -> bool:
         return False
 
 
-def pytest_collection_modifyitems(config, items):  # noqa: ANN001
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     live_items = [item for item in items if "live" in item.keywords]
     if not live_items:
         return
@@ -28,8 +28,7 @@ def pytest_collection_modifyitems(config, items):  # noqa: ANN001
     if _reachable(settings.clickhouse_host, settings.clickhouse_port):
         return  # the server is up: the live tier runs
     skip = pytest.mark.skip(
-        reason=f"live tier: no ClickHouse at "
-        f"{settings.clickhouse_host}:{settings.clickhouse_port}"
+        reason=f"live tier: no ClickHouse at {settings.clickhouse_host}:{settings.clickhouse_port}"
     )
     for item in live_items:
         item.add_marker(skip)

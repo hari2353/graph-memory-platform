@@ -24,8 +24,8 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
-from graph_memory.core.errors import PlatformError
 from graph_memory.context.service import parse_as_of
+from graph_memory.core.errors import PlatformError
 from graph_memory.core.ports import (
     ContextProvider,
     MemoryExport,
@@ -172,7 +172,10 @@ def create_rest_app(
     _replay: dict[tuple[str, str], tuple[float, dict[str, Json]]] = {}
 
     async def _context_of(
-        authorization: str | None, scope: Scope, user: str, capability: str,
+        authorization: str | None,
+        scope: Scope,
+        user: str,
+        capability: str,
         as_of: str | None = None,
     ) -> UserContext:
         """One checked read: guard first, tenant from claims only (SPEC §8/§15)."""
@@ -190,8 +193,10 @@ def create_rest_app(
                 stages["admission"] = (time.perf_counter() - stage_start) * 1000.0
             stage_start = time.perf_counter()
             context = await provider.get(
-                principal, UserRef(principal.tenant, user_key(user)),
-                Capability(capability), as_of=parse_as_of(as_of),
+                principal,
+                UserRef(principal.tenant, user_key(user)),
+                Capability(capability),
+                as_of=parse_as_of(as_of),
             )
             stages["lookup_assemble"] = (time.perf_counter() - stage_start) * 1000.0
             if metering is not None:
@@ -228,9 +233,7 @@ def create_rest_app(
         if_none_match: Annotated[str | None, Header()] = None,
         authorization: Annotated[str | None, Header()] = None,
     ) -> Response:
-        ctx = await _context_of(
-            authorization, Scope.CONTEXT_READ, user, capability, as_of=as_of
-        )
+        ctx = await _context_of(authorization, Scope.CONTEXT_READ, user, capability, as_of=as_of)
         generated = ctx.generated_at.isoformat()
         etag = _etag_for(ctx.cache_scope, generated, ctx.payload)
         if if_none_match == etag:
@@ -268,9 +271,7 @@ def create_rest_app(
         cursor: str | None = None,
         authorization: Annotated[str | None, Header()] = None,
     ) -> JSONResponse:
-        ctx = await _context_of(
-            authorization, Scope.CONTEXT_READ, user, capability
-        )
+        ctx = await _context_of(authorization, Scope.CONTEXT_READ, user, capability)
         try:
             page_size = max(1, min(limit, _MAX_ITEM_LIMIT))
             ranked = _ranked_items(ctx.payload)
@@ -306,9 +307,7 @@ def create_rest_app(
         authorization: Annotated[str | None, Header()] = None,
         idempotency_key: Annotated[str | None, Header()] = None,
     ) -> JSONResponse:
-        ctx = await _context_of(
-            authorization, Scope.CONTEXT_READ, user, capability
-        )
+        ctx = await _context_of(authorization, Scope.CONTEXT_READ, user, capability)
         body: dict[str, Json] = {
             "materialized": True,
             "cache_scope": ctx.cache_scope,
