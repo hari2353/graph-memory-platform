@@ -212,31 +212,37 @@ def test_ingest_reflect_community_over_both_channels() -> None:
         assert posted.status_code == 200, posted.text
         assert posted.json()["accepted"] == 4
         _wait_skills()
+
+        # Reflect while serve is LIVE: both writers take the projection lock,
+        # so the tick cannot land inside a replay's copy/swap window.
+        reflected = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "graph_memory.ops.cli",
+                "reflect",
+                "--mapping",
+                str(_SPEC),
+            ],
+            env=_ENV,
+            cwd=Path(__file__).parent.parent.parent,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+        assert reflected.returncode == 0, reflected.stdout + reflected.stderr
+        communities = _int_field(r"communities=(\d+)", reflected.stdout)
+        edges = _int_field(r"community_edges=(\d+)", reflected.stdout)
+        assert communities >= 1
+        assert edges >= 6
+
+        # The still-running serve must serve the tick's rows without a restart.
+        _assert_community(_community_rest())
     finally:
         _stop(serve)
 
-    reflected = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "graph_memory.ops.cli",
-            "reflect",
-            "--mapping",
-            str(_SPEC),
-        ],
-        env=_ENV,
-        cwd=Path(__file__).parent.parent.parent,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=60,
-    )
-    assert reflected.returncode == 0, reflected.stdout + reflected.stderr
-    communities = _int_field(r"communities=(\d+)", reflected.stdout)
-    edges = _int_field(r"community_edges=(\d+)", reflected.stdout)
-    assert communities >= 1
-    assert edges >= 6
-
+    # Restart proves the rows are durable, not just cached in the live process.
     serve = _serve()
     try:
         rest_items = _community_rest()

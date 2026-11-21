@@ -21,6 +21,7 @@ Pipeline in one deterministic tick:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from graph_memory.core.clock import Clock
 from graph_memory.core.types import TenantId
@@ -187,6 +188,8 @@ def apply_effectives(
     ledger: LedgerRepository,
     gateway: GraphGateway,
     clock: Clock,
+    *,
+    lock_path: Path | None = None,
 ) -> dict[TenantId, EffectivenessReport]:
     """Tick every tenant, then replay through a projector carrying the rows."""
     reports: dict[TenantId, EffectivenessReport] = {}
@@ -196,6 +199,13 @@ def apply_effectives(
         reports[tenant] = report
         for key, multiplier in report.weight_overrides.items():
             overrides.setdefault(key, multiplier)
-    engine = Projector(spec, ledger, gateway, clock, weight_overrides=overrides or None)
+    engine = Projector(
+        spec,
+        ledger,
+        gateway,
+        clock,
+        weight_overrides=overrides or None,
+        lock_path=lock_path,
+    )
     engine.replay()
     return reports

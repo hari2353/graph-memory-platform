@@ -156,9 +156,11 @@ prose.
 
 The tick clears derived kinds once, globally, then rewrites every tenant.
 Replay carries these rows across its staged table swap, so serve's 1-second
-projection pass cannot erase a community. Schedule `platform reflect`; avoid
-running it at the same instant as a serve replay pass (the copy/swap window
-can drop a concurrent write until the next tick).
+projection pass cannot erase a community. Serve replay and `platform reflect`
+both take one cross-process `flock` (`GMP_PROJECTION_LOCK`, default
+`$TMPDIR/gmp-projection.lock`), so a tick can run while serve is live without
+landing inside the copy/swap window. Point the variable at a shared volume if
+the two processes ever run on different hosts.
 
 ## Verification (the gates every commit passes)
 
@@ -171,6 +173,10 @@ docker compose -f ops/compose/pulsar.yaml up -d
 export GMP_CLICKGRAPH_BINARY="$HOME/.cache/gmp-clickgraph/clickgraph"
 uv run pytest -m live              # 16 passed: gateways, ClickGraph, serve, E2E, ops, Pulsar
 ```
+
+`.github/workflows/live.yml` runs the same suite on every push to `main`,
+nightly, and on demand: both compose files, ClickGraph 0.6.8 downloaded from
+its pinned release, zero skips.
 
 Offline + gates:
 

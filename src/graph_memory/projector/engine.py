@@ -21,9 +21,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import combinations
 from math import exp, log
+from pathlib import Path
 
 from graph_memory.core.clock import Clock
 from graph_memory.core.errors import PlatformError
+from graph_memory.core.lock import projection_lock
 from graph_memory.core.tokens import estimate_tokens
 from graph_memory.core.types import REFLECTION_KINDS, Capability, TenantId, UserKey
 from graph_memory.mapping.compiler import EdgeOp, NodeOp, compile_plan
@@ -122,12 +124,14 @@ class Projector:
         clock: Clock,
         *,
         weight_overrides: Mapping[tuple[str, str, str], float] | None = None,
+        lock_path: Path | None = None,
     ) -> None:
         self._spec = spec
         self._ledger = ledger
         self._gateway = gateway
         self._clock = clock
         self._overrides = weight_overrides
+        self._lock_path = lock_path
 
     @property
     def spec(self) -> MappingSpec:
@@ -177,12 +181,13 @@ class Projector:
         The rebuild stages into the gateway's hold-out and publishes atomically
         at the end, so serving readers never observe a half-built graph.
         """
-        self._gateway.replace_all()
-        digests: dict[TenantId, ProjectionDigest] = {}
-        for tenant in self._ledger.tenants():
-            digests[tenant] = self.process_events(self._ledger.read_events(tenant))
-        self._gateway.commit_rebuild()
-        return digests
+        with projection_lock(self._lock_path):
+            self._gateway.replace_all()
+            digests: dict[TenantId, ProjectionDigest] = {}
+            for tenant in self._ledger.tenants():
+                digests[tenant] = self.process_events(self._ledger.read_events(tenant))
+            self._gateway.commit_rebuild()
+            return digests
 
     def _project(self, event: StoredEvent) -> ProjectionDigest:
         envelope = event.envelope
@@ -215,8 +220,13 @@ class Projector:
         COMMUNITY_HAS_SKILL edge weighted by support. That is the bounded
         2-hop traversal (user -> community -> shared fact) the read path
         serves through an ordinary capability. The injected Clock stamps
-        the tick instant.
+        the tick instant. The writer lock keeps the tick out of serve's
+        staged copy/swap window.
         """
+        with projection_lock(self._lock_path):
+            return self._reflect(min_shared=min_shared)
+
+    def _reflect(self, *, min_shared: int) -> ReflectionDigest:
         users_scanned = 0
         pairs_scored = 0
         similar_edges = 0
@@ -224,9 +234,7 @@ class Projector:
         community_edges = 0
         now = self._clock.now()
         # Derived kinds are one global rewrite: clear once, then write every
-        # tenant. shortcut: reflect is not locked against serve's rebuild
-        # swap, so an overlapping tick can lose part of its write until the
-        # next tick; add a cross-process lock if reflect becomes sub-minute.
+        # tenant.
         for kind in _REFLECTION_KINDS:
             self._gateway.clear_kind(kind)
         for tenant in self._ledger.tenants():

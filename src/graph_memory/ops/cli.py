@@ -118,7 +118,14 @@ def replay_run(mapping_path: str, from_iso: str | None, backend: str) -> None:
     # Same boot semantics as serve: the loop is part of the deterministic
     # path (stored rows carry the tick's weighted values).
     continuous = ContinuousEffectivenessLoop(spec, ledger, clock)
-    engine = Projector(spec, ledger, gateway, clock, weight_overrides=continuous.rows())
+    engine = Projector(
+        spec,
+        ledger,
+        gateway,
+        clock,
+        weight_overrides=continuous.rows(),
+        lock_path=settings.projection_lock,
+    )
     if from_iso is None:
         digests = engine.replay()
     else:
@@ -187,7 +194,7 @@ def audit_inspect_user(tenant: str, user: str, mapping_path: str | None, backend
         gateway = clickhouse
     spec_path = Path(mapping_path) if mapping_path is not None else Path(_default_mapping())
     spec = load_spec(spec_path.read_text(encoding="utf-8"))
-    engine = Projector(spec, ledger, gateway, SystemClock())
+    engine = Projector(spec, ledger, gateway, SystemClock(), lock_path=settings.projection_lock)
     if backend != "memory":
         engine.replay()
     click.echo(inspect_user(engine, TenantId(tenant), UserKey(user)))
@@ -329,7 +336,9 @@ def loop_run(mapping_path: str, backend: str) -> None:
     gateway = ClickHouseGateway(settings)
     gateway.ensure_graph_schema()
     spec = load_spec(Path(mapping_path).read_text(encoding="utf-8"))
-    reports = apply_effectives(spec, ledger, gateway, SystemClock())
+    reports = apply_effectives(
+        spec, ledger, gateway, SystemClock(), lock_path=settings.projection_lock
+    )
     if not reports:
         click.echo("loop: ledger empty — nothing to score")
         return
@@ -368,7 +377,9 @@ def reflect(mapping_path: str, min_shared: int, backend: str) -> None:
     gateway = ClickHouseGateway(settings)
     gateway.ensure_graph_schema()
     spec = load_spec(Path(mapping_path).read_text(encoding="utf-8"))
-    digest = Projector(spec, ledger, gateway, SystemClock()).reflect(min_shared=min_shared)
+    digest = Projector(
+        spec, ledger, gateway, SystemClock(), lock_path=settings.projection_lock
+    ).reflect(min_shared=min_shared)
     click.echo(
         f"reflect: users={digest.users_scanned} pairs={digest.pairs_scored} "
         f"similar_edges={digest.similar_edges_written} "
@@ -587,7 +598,12 @@ def serve(
     continuous = ContinuousEffectivenessLoop(resolved_spec, ledger, spare_clock)
     guard = StaticBearerGuard(settings.dev_static_tokens)
     engine = Projector(
-        resolved_spec, ledger, gateway, continuous.clock, weight_overrides=continuous.rows()
+        resolved_spec,
+        ledger,
+        gateway,
+        continuous.clock,
+        weight_overrides=continuous.rows(),
+        lock_path=settings.projection_lock,
     )
     digests = engine.replay()
     for tenant, digest in sorted(digests.items()):

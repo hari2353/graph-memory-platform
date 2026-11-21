@@ -1,0 +1,61 @@
+name: Live tier
+
+# The offline suite deselects `-m live`; this job runs it against the real
+# tier compose files + the pinned ClickGraph binary. Pulsar tests docker-exec
+# into the compose container, so the service is started by compose (a GH
+# service container would have a generated name).
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+
+concurrency:
+  group: live-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Start ClickHouse
+        run: docker compose -f ops/compose/clickhouse.yaml up -d --wait
+
+      - name: Start Pulsar
+        run: docker compose -f ops/compose/pulsar.yaml up -d --wait
+
+      - name: Fetch ClickGraph 0.6.8
+        run: |
+          mkdir -p "$HOME/.cache/gmp-clickgraph"
+          curl -fsSL \
+            https://github.com/genezhang/clickgraph/releases/download/v0.6.8-deltagraph-prev/clickgraph-linux-amd64.tar.gz \
+            | tar -xzf - -C "$HOME/.cache/gmp-clickgraph"
+          echo "GMP_CLICKGRAPH_BINARY=$HOME/.cache/gmp-clickgraph/clickgraph" >> "$GITHUB_ENV"
+          "$HOME/.cache/gmp-clickgraph/clickgraph" --version
+
+      - name: Install
+        run: uv sync --group dev
+
+      - name: Live suite
+        run: uv run pytest -m live -q -rs
+
+      - name: Logs on failure
+        if: failure()
+        run: |
+          docker compose -f ops/compose/clickhouse.yaml logs --tail 200
+          docker compose -f ops/compose/pulsar.yaml logs --tail 200
+
+      - name: Stop tier
+        if: always()
+        run: |
+          docker compose -f ops/compose/pulsar.yaml down -v
+          docker compose -f ops/compose/clickhouse.yaml down -v

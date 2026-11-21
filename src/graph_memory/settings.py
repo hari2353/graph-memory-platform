@@ -7,6 +7,9 @@ Every value is overridable via ``GMP_*`` environment variables.
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +28,11 @@ class Settings(BaseSettings):
     nodes_table: str = "gm_nodes"
     edges_table: str = "gm_edges"
     forgets_table: str = "gm_forgets"
+
+    # One writer at a time: serve's replay and `platform reflect` both mutate
+    # the published tables. Override on a shared volume when they are not
+    # co-located (see core/lock.py).
+    projection_lock: Path = Path(tempfile.gettempdir()) / "gmp-projection.lock"
 
     max_batch_events: int = 10_000
     max_payload_bytes: int = 65_536  # CloudEvents' 64 KiB intermediary guidance
