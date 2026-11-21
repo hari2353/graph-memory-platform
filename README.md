@@ -125,7 +125,7 @@ channel uses - one ledger, no second ingest truth; poison lands in the DLQ.
 
 | Channel | Contract |
 |---|---|
-| **MCP** (primary) | 6 read-model tools over streamable HTTP — `get_context`, `search_memory`, `list_capabilities`, `get_signal_schema`, `get_effectiveness` (the loop's report for the caller's tenant), `explain_context` (graph-annotated provenance per read); stateless JSON mode (2026-07-28 protocol) or sessioned compat; tenant from the bearer token, never a tool argument; failures ride `is_error` tool results |
+| **MCP** (primary) | 6 read-model tools over streamable HTTP — `get_context`, `search_memory`, `list_capabilities`, `get_signal_schema`, `get_effectiveness` (the loop's report for the caller's tenant), `explain_context` (graph-annotated provenance per read); per-capability `max_tokens` (default 2,000) truncates by rank and reports `truncated`/`omitted`; stateless JSON mode (2026-07-28 protocol) or sessioned compat; tenant from the bearer token, never a tool argument; failures ride `is_error` tool results |
 | **REST /v1** | `/v1/context/{user}/{capability}` with ETag/304 revalidation, `Cache-Control` from the provider's staleness window, cursor pagination on `/items`, `Idempotency-Key` replay on `/prefetch`; every request emits one per-stage span + a metering tick |
 | **Webhooks** | `X-GMP-Signature` HMAC-SHA256 over `ts.body` (constant-time verify, 300s freshness), retry ladder 5·5ⁱ s capped 600s ×5 attempts, auto-disable on exhaustion |
 | **SDK** | `GraphMemoryClient` — thin HTTP facade (ingest, context, item pages, prefetch); no retry logic by design |

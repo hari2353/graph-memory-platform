@@ -14,6 +14,7 @@ Determinism rules (SPEC §3, plan §3 risk 2):
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,6 +23,7 @@ from math import exp, log
 
 from graph_memory.core.clock import Clock
 from graph_memory.core.errors import PlatformError
+from graph_memory.core.tokens import estimate_tokens
 from graph_memory.core.types import Capability, TenantId, UserKey
 from graph_memory.mapping.compiler import EdgeOp, NodeOp, compile_plan
 from graph_memory.mapping.spec import CapabilityRule, MappingSpec
@@ -309,20 +311,42 @@ class Projector:
                 row.weight, row.half_life_days, row.valid_at, now
             )
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0][0], item[0][1]))
-        items = [
-            {"kind": kind, "target": target, "score": round(score, 9)}
-            for (kind, target), score in ranked[: rule.top_k]
-        ]
-        nodes = self._gateway.nodes_of(
-            tenant, [target for (_kind, target), _score in ranked[: rule.top_k]]
-        )
-        labels = {node.key: list(node.labels) for node in nodes}
-        payload: dict[str, object] = {
-            "capability": capability,
-            "top_k": rule.top_k,
-            "items": items,
-            "labels": labels,
-        }
+        candidates = ranked[: rule.top_k]
+        nodes = self._gateway.nodes_of(tenant, [target for (_kind, target), _score in candidates])
+        node_labels = {node.key: list(node.labels) for node in nodes}
+
+        def render(selected: list[tuple[tuple[str, str], float]]) -> dict[str, object]:
+            items = [
+                {"kind": kind, "target": target, "score": round(score, 9)}
+                for (kind, target), score in selected
+            ]
+            labels = {
+                target: node_labels[target]
+                for (_kind, target), _score in selected
+                if target in node_labels
+            }
+            omitted = len(candidates) - len(selected)
+            return {
+                "capability": capability,
+                "top_k": rule.top_k,
+                "max_tokens": rule.max_tokens,
+                "items": items,
+                "labels": labels,
+                "truncated": omitted > 0,
+                "omitted": omitted,
+            }
+
+        # Overflow prevention: drop the lowest-ranked items until the served
+        # payload fits the capability budget. Bounded by top_k <= 100.
+        selected = candidates
+        while True:
+            payload = render(selected)
+            if (
+                estimate_tokens(json.dumps(payload, sort_keys=True)) <= rule.max_tokens
+                or not selected
+            ):
+                break
+            selected = selected[:-1]
         return SnapshotDoc(
             tenant=tenant,
             user=user,

@@ -9,7 +9,8 @@ v1 grammar (additive-only evolution — SPEC §5, §18):
   governed negative of edge rules. A signal family dedicates itself to
   forgetting: it may declare forgets OR nodes/edges, never both.
 - ``capabilities``: which relation sets a context capability exposes, with
-  ``top_k`` and ``ttl_ms`` (the staleness contract channels honor).
+  ``top_k``, the ``max_tokens`` payload budget (overflow prevention), and
+  ``ttl_ms`` (the staleness contract channels honor).
 
 The compiled artifact is a pure function: same (events, spec version) ->
 byte-identical projection plans. There is no LLM and no wall clock inside
@@ -283,6 +284,7 @@ class CapabilityRule(BaseModel):
 
     relations: tuple[str, ...]
     top_k: Annotated[int, Field(ge=1, le=100)] = 10
+    max_tokens: Annotated[int, Field(ge=1, le=8_000)] = 2_000
     ttl_ms: Annotated[int, Field(ge=1_000, le=86_400_000)] = 60_000
 
     @field_validator("relations")

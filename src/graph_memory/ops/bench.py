@@ -22,7 +22,16 @@ import time
 from dataclasses import dataclass
 
 from graph_memory.context.service import ContextCache, MemoryContextProvider
-from graph_memory.core.types import Capability, Principal, Scope, TenantId, UserRef, user_key
+from graph_memory.core.tokens import estimate_tokens as estimate_tokens
+from graph_memory.core.types import (
+    Capability,
+    Json,
+    Principal,
+    Scope,
+    TenantId,
+    UserRef,
+    user_key,
+)
 from graph_memory.mapping.spec import MappingSpec, load_spec
 from graph_memory.projector.engine import Projector
 from graph_memory.projector.gateway import InMemoryGraphGateway
@@ -41,9 +50,14 @@ signals:
 capabilities:
   skills:
     relations: [HAS_SKILL]
-    top_k: 5
+    top_k: 100
+    max_tokens: __MAX_TOKENS__
     ttl_ms: 60000
 """
+
+
+def _profile_spec(max_tokens: int) -> str:
+    return _PROFILE_SPEC.replace("__MAX_TOKENS__", str(max_tokens))
 
 
 def parse_budget(raw: str) -> float:
@@ -80,9 +94,19 @@ class BenchReport:
         )
 
 
-def build_hotpath_profile(users: int, *, skills_per_user: int = 3) -> MemoryContextProvider:
-    """Synthetic profile: every user holds ``skills_per_user`` observations."""
-    spec: MappingSpec = load_spec(_PROFILE_SPEC)
+def build_hotpath_profile(
+    users: int,
+    *,
+    skills_per_user: int = 3,
+    long_targets: bool = False,
+    max_tokens: int = 2000,
+) -> MemoryContextProvider:
+    """Synthetic profile: every user holds ``skills_per_user`` observations.
+
+    ``long_targets`` pads each target so the budget gate exercises real
+    truncation instead of three short items that fit trivially.
+    """
+    spec: MappingSpec = load_spec(_profile_spec(max_tokens))
     ledger = InMemoryLedger()
     gateway = InMemoryGraphGateway()
     from datetime import UTC, datetime
@@ -93,6 +117,8 @@ def build_hotpath_profile(users: int, *, skills_per_user: int = 3) -> MemoryCont
     for index in range(users * skills_per_user):
         user = f"user-{index % users:04d}"
         skill = f"skill-{index // users:03d}"
+        if long_targets:
+            skill += "-" + "x" * 120
         payload: dict[str, object] = {
             "specversion": "1.0",
             "id": f"bench-{index}",
@@ -115,15 +141,6 @@ def _percentile(sorted_ms: list[float], pct: float) -> float:
     return sorted_ms[rank]
 
 
-def estimate_tokens(text: str) -> int:
-    """The documented token estimate: ~4 characters per token (no tokenizer).
-
-    Cheap and order-stable; the gate asserts against this proxy, never
-    against a model's true count — the honest unit is "estimated tokens".
-    """
-    return max(1, (len(text) + 3) // 4)
-
-
 @dataclass(frozen=True)
 class PayloadBudgetReport:
     """The token-budget gate's outcome: worst payload vs the proposal cap."""
@@ -131,6 +148,8 @@ class PayloadBudgetReport:
     samples: int
     max_tokens: int
     budget_tokens: float
+    max_items: int
+    truncated_samples: int
 
     @property
     def passed(self) -> bool:
@@ -139,7 +158,8 @@ class PayloadBudgetReport:
     def render(self) -> str:
         return (
             f"PAYLOAD bench: samples={self.samples} max_tokens={self.max_tokens} "
-            f"budget={self.budget_tokens:.0f} "
+            f"budget={self.budget_tokens:.0f} items_max={self.max_items} "
+            f"truncated={self.truncated_samples}/{self.samples} "
             f"-> {'PASSED' if self.passed else 'FAILED'}"
         )
 
@@ -149,29 +169,44 @@ async def run_payload_budget_bench(
     users: int = 30,
     budget_tokens: float = 2000.0,
 ) -> PayloadBudgetReport:
-    """Assert every served context payload stays under the token budget."""
-    provider = await asyncio.to_thread(build_hotpath_profile, users)
+    """Assert worst-case context payloads stay under the token budget.
 
-    def serve_all() -> list[int]:
-        async def collect() -> list[int]:
-            tokens: list[int] = []
+    Seeds ``top_k`` long targets per user through the REAL provider, so the
+    gate fails unless the projector's overflow prevention actually truncates.
+    """
+    provider = await asyncio.to_thread(
+        build_hotpath_profile,
+        users,
+        skills_per_user=100,
+        long_targets=True,
+        max_tokens=max(1, int(budget_tokens)),
+    )
+
+    def serve_all() -> list[dict[str, Json]]:
+        async def collect() -> list[dict[str, Json]]:
+            payloads: list[dict[str, Json]] = []
             for index in range(users):
                 ref = UserRef(
                     tenant=_PRINCIPAL.tenant,
                     user_key=user_key(f"user-{index % users:04d}"),
                 )
                 ctx = await provider.get(_PRINCIPAL, ref, Capability("skills"))
-                text = json.dumps(ctx.payload, sort_keys=True)
-                tokens.append(estimate_tokens(text))
-            return tokens
+                payloads.append(ctx.payload)
+            return payloads
 
         return asyncio.run(collect())
 
-    tokens = await asyncio.to_thread(serve_all)
+    payloads = await asyncio.to_thread(serve_all)
+    tokens = [estimate_tokens(json.dumps(payload, sort_keys=True)) for payload in payloads]
+    counts = [
+        len(items) if isinstance(items := payload.get("items"), list) else 0 for payload in payloads
+    ]
     return PayloadBudgetReport(
         samples=len(tokens),
         max_tokens=max(tokens),
         budget_tokens=budget_tokens,
+        max_items=max(counts),
+        truncated_samples=sum(1 for payload in payloads if payload.get("truncated") is True),
     )
 
 

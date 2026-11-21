@@ -31,13 +31,18 @@ def test_estimate_tokens_is_the_documented_four_chars_proxy() -> None:
 async def test_payload_budget_bench_passes_the_proposal_gate() -> None:
     report = await run_payload_budget_bench(users=4, budget_tokens=2000.0)
     assert report.samples == 4
-    assert report.max_tokens <= 2000.0  # bounded top_k, tiny payloads
+    assert report.max_tokens <= 2000.0  # worst-case 100-item graph, not 3 short skills
+    assert 0 < report.max_items < 100
+    assert report.truncated_samples == 4
     assert report.passed
+    assert "items_max=" in report.render() and "truncated=4/4" in report.render()
     assert "PASSED" in report.render()
 
 
 async def test_tiny_token_budget_flips_the_gate_red() -> None:
     report = await run_payload_budget_bench(users=2, budget_tokens=0.5)
+    assert report.max_items == 0  # nothing fits; never silently exceed the ask
+    assert report.max_tokens > report.budget_tokens
     assert not report.passed
     assert "FAILED" in report.render()
 
