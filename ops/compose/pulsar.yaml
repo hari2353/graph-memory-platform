@@ -21,7 +21,7 @@ services:
       - "6650:6650" # binary protocol — real client libraries connect here
       - "8099:8080" # HTTP admin/REST — probes and the drain receiver
     healthcheck:
-      test: ["CMD", "bin/pulsar-admin", "brokers", "list"]
+      test: ["CMD", "bin/pulsar-admin", "brokers", "list", "standalone"]
       interval: 10s
       timeout: 10s
       retries: 12

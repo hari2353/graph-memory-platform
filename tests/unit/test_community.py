@@ -64,19 +64,25 @@ def _engine() -> tuple[Projector, InMemoryLedger]:
     return engine, ledger
 
 
-def _seed(engine: Projector, ledger: InMemoryLedger, *pairs: tuple[str, str]) -> None:
+def _seed(
+    engine: Projector,
+    ledger: InMemoryLedger,
+    *pairs: tuple[str, str],
+    tenant: TenantId = _T,
+    id_prefix: str = "c",
+) -> None:
     for index, (user, skill) in enumerate(pairs):
         payload: dict[str, object] = {
             "specversion": "1.0",
-            "id": f"c{index}",
+            "id": f"{id_prefix}{index}",
             "source": "https://app.example.com/signals",
             "type": "itf.skill_assessed.v1",
             "time": "2026-06-01T12:00:00.000Z",
             "partitionkey": user,
             "data": {"skill": skill},
         }
-        ledger.append([record_from_envelope(_T, Envelope.parse(payload))])
-    engine.process_events(ledger.read_events(_T))
+        ledger.append([record_from_envelope(tenant, Envelope.parse(payload))])
+    engine.process_events(ledger.read_events(tenant))
 
 
 def _items(payload: dict[str, object]) -> list[dict[str, object]]:
@@ -132,6 +138,37 @@ def test_lone_user_has_no_community() -> None:
     assert digest.communities_written == 0
     payload = engine.snapshot(_T, UserKey("user-1"), Capability("community")).payload
     assert _items(payload) == []
+
+
+def test_reflection_rewrites_every_tenant() -> None:
+    """The tick clears globally once; per-tenant passes must not erase each other."""
+    engine, ledger = _engine()
+    _seed(
+        engine,
+        ledger,
+        ("user-1", "rust"),
+        ("user-1", "python"),
+        ("user-2", "rust"),
+        ("user-2", "python"),
+    )
+    other = TenantId("other")
+    _seed(
+        engine,
+        ledger,
+        ("user-1", "go"),
+        ("user-1", "sql"),
+        ("user-2", "go"),
+        ("user-2", "sql"),
+        tenant=other,
+        id_prefix="o",
+    )
+
+    digest = engine.reflect()
+
+    assert digest.communities_written == 2
+    for tenant in (_T, other):
+        payload = engine.snapshot(tenant, UserKey("user-1"), Capability("community")).payload
+        assert _items(payload), f"tenant {tenant!r} lost its community"
 
 
 def test_community_is_idempotent_and_ignores_its_own_edges() -> None:
@@ -191,3 +228,28 @@ def test_community_is_stable_after_replay() -> None:
         default=str,
     )
     assert after == before
+
+
+def test_replay_alone_preserves_reflection_owned_edges() -> None:
+    """Serve replays every second; a bare replay must not erase communities."""
+    engine, ledger = _engine()
+    _seed(
+        engine,
+        ledger,
+        ("user-1", "rust"),
+        ("user-1", "python"),
+        ("user-2", "rust"),
+        ("user-2", "python"),
+    )
+    engine.reflect()
+    before = _community_edges(engine, "user-1")
+    assert before
+
+    engine.replay()
+
+    assert _community_edges(engine, "user-1") == before
+    payload = engine.snapshot(_T, UserKey("user-1"), Capability("community")).payload
+    labels = payload["labels"]
+    assert isinstance(labels, dict)
+    community_id = next(key for key in labels if key.startswith("community:"))
+    assert labels[community_id] == ["community"]

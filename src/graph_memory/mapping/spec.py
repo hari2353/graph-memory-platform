@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from pydantic_core import PydanticCustomError
 
 from graph_memory.core.errors import PlatformError
-from graph_memory.core.types import Json, signal_type
+from graph_memory.core.types import REFLECTION_KINDS, Json, signal_type
 from graph_memory.signals.envelope import Envelope
 
 VERSION = 1
@@ -40,9 +40,7 @@ _KIND = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 _LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,31}$")
 _PLACEHOLDER = re.compile(r"\{([A-Za-z0-9_.]+)\}")
 _RESERVED_PLACEHOLDERS = frozenset({"partitionkey", "id", "source", "type", "time"})
-_SYSTEM_KINDS = frozenset(
-    {"SIMILAR_TO", "MEMBER_OF", "COMMUNITY_HAS_SKILL"}
-)  # written by reflection, not by signals
+_SYSTEM_KINDS = REFLECTION_KINDS  # written by reflection, not by signals
 
 
 class MappingError(PlatformError):

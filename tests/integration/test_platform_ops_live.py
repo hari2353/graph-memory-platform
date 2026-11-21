@@ -126,6 +126,24 @@ class TestMeteringTableLive:
 
 @pytest.mark.live
 class TestOperatorCommands:
+    def _seed(self) -> None:
+        """Commands read the shared default ledger; seed it so a clean tier passes."""
+        from graph_memory.signals.envelope import Envelope
+        from graph_memory.signals.ledger import ClickHouseLedger, record_from_envelope
+
+        ledger = ClickHouseLedger(Settings())
+        ledger.ensure_schema()
+        payload: dict[str, object] = {
+            "specversion": "1.0",
+            "id": f"lt-ops-{uuid.uuid4().hex}",
+            "source": "https://live.example.com/signals",
+            "type": "itf.skill_assessed.v1",
+            "time": "2026-06-01T12:00:00.000Z",
+            "partitionkey": "lt-ops-user",
+            "data": {"skill": "rust"},
+        }
+        ledger.append([record_from_envelope(TenantId("acme"), Envelope.parse(payload))])
+
     def test_tenancy_onboard_list_status(self) -> None:
         _require()
         from click.testing import CliRunner
@@ -150,6 +168,7 @@ class TestOperatorCommands:
 
         from graph_memory.ops.cli import cli
 
+        self._seed()
         result = CliRunner().invoke(cli, ["loop", "run", "--mapping", str(_MAPPING)])
         assert result.exit_code == 0, result.output
         assert "loop[" in result.output
@@ -160,6 +179,7 @@ class TestOperatorCommands:
 
         from graph_memory.ops.cli import cli
 
+        self._seed()
         plan = CliRunner().invoke(cli, ["replay"])
         assert plan.exit_code == 0
         assert "REPLAY PLAN" in plan.output

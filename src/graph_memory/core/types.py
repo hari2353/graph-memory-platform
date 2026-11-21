@@ -25,6 +25,10 @@ MAX_SIGNAL_TYPE_LEN = 128
 
 type Json = str | int | float | bool | None | list[Json] | dict[str, Json]
 
+# Derived graph kinds written by the reflection tick, never by signals.
+# Rebuilds must carry them forward: replay re-derives signal rows only.
+REFLECTION_KINDS = frozenset({"SIMILAR_TO", "MEMBER_OF", "COMMUNITY_HAS_SKILL"})
+
 
 class Scope(StrEnum):
     """Capabilities granted to a principal; coarse by design (SPEC §17:

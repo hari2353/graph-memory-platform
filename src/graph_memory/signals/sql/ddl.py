@@ -33,7 +33,7 @@ _DLQ = """CREATE TABLE IF NOT EXISTS {database}.{dlq_table} (
 )
 ENGINE = MergeTree
 ORDER BY (tenant_id, occurred_at)
-TTL occurred_at + INTERVAL 180 DAY"""
+TTL toDateTime(occurred_at) + INTERVAL 180 DAY"""
 
 
 def build_ddl(database: str, signals_table: str, dlq_table: str) -> tuple[str, ...]:

@@ -1,0 +1,45 @@
+# End-to-end fixture: the reference skill loop plus the derived community
+# capability. Two users sharing two facts form one community.
+mapping_version: 1
+signals:
+  itf.skill_assessed.v1:
+    nodes:
+      - key: "skill:{data.skill}"
+        labels: [skill]
+        props:
+          name: "{data.skill}"
+    edges:
+      - kind: HAS_SKILL
+        target: "skill:{data.skill}"
+        weight: 1.0
+        half_life_days: 180
+  itf.reco.v1:
+    edges:
+      - kind: RECOMMENDED
+        target: "skill:{data.skill}"
+        weight: 0.5
+        half_life_days: 14
+  itf.outcome.v1:
+    edges:
+      - kind: OUTCOME_IMPROVED
+        target: "skill:{data.skill}"
+        weight: 2.0
+        half_life_days: 30
+effectiveness:
+  reco_signals: [itf.reco.v1]
+  outcome_signals: [itf.outcome.v1]
+  correlation_field: "data.correlation_id"
+  cohort_field: "data.cohort"
+capabilities:
+  skills:
+    relations: [HAS_SKILL]
+    top_k: 5
+    ttl_ms: 60000
+  peers:
+    relations: [SIMILAR_TO]
+    top_k: 5
+    ttl_ms: 60000
+  community:
+    relations: [MEMBER_OF, COMMUNITY_HAS_SKILL]
+    top_k: 10
+    ttl_ms: 60000

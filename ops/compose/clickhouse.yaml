@@ -7,10 +7,10 @@
 # sidecar of this stack — see docs/SPEC.md §4 for the pinned-version policy.
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8
+    image: clickhouse/clickhouse-server:25.8
     container_name: gmp-clickhouse
     ports:
-      - "8124:8124"  # HTTP (the endpoint Settings defaults to)
+      - "8124:8123"  # host 8124 -> container HTTP 8123 (the endpoint Settings defaults to)
       - "9000:9000"  # native, for clickhouse-client during incident work
     environment:
       CLICKHOUSE_USER: clickhouse
@@ -19,7 +19,7 @@ services:
     volumes:
       - gmp-clickhouse-data:/var/lib/clickhouse
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8124/ping"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8123/ping"]
       interval: 5s
       timeout: 3s
       retries: 12

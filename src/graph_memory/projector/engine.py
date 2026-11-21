@@ -25,7 +25,7 @@ from math import exp, log
 from graph_memory.core.clock import Clock
 from graph_memory.core.errors import PlatformError
 from graph_memory.core.tokens import estimate_tokens
-from graph_memory.core.types import Capability, TenantId, UserKey
+from graph_memory.core.types import REFLECTION_KINDS, Capability, TenantId, UserKey
 from graph_memory.mapping.compiler import EdgeOp, NodeOp, compile_plan
 from graph_memory.mapping.spec import CapabilityRule, MappingSpec
 from graph_memory.projector.gateway import EdgeRow, GraphGateway
@@ -35,7 +35,7 @@ _LN2 = log(2.0)
 _SIMILAR_KIND = "SIMILAR_TO"
 _COMMUNITY_MEMBER_KIND = "MEMBER_OF"
 _COMMUNITY_FACT_KIND = "COMMUNITY_HAS_SKILL"
-_REFLECTION_KINDS = frozenset({_SIMILAR_KIND, _COMMUNITY_MEMBER_KIND, _COMMUNITY_FACT_KIND})
+_REFLECTION_KINDS = REFLECTION_KINDS
 _COMMUNITY_MIN_MEMBERS = 2
 _COMMUNITY_MAX_FACTS = 50
 _SIMILAR_MIN_SHARED = 2
@@ -223,9 +223,13 @@ class Projector:
         communities_written = 0
         community_edges = 0
         now = self._clock.now()
+        # Derived kinds are one global rewrite: clear once, then write every
+        # tenant. shortcut: reflect is not locked against serve's rebuild
+        # swap, so an overlapping tick can lose part of its write until the
+        # next tick; add a cross-process lock if reflect becomes sub-minute.
+        for kind in _REFLECTION_KINDS:
+            self._gateway.clear_kind(kind)
         for tenant in self._ledger.tenants():
-            for kind in _REFLECTION_KINDS:
-                self._gateway.clear_kind(kind)
             users = self._gateway.users(tenant)
             users_scanned += len(users)
             facts: dict[UserKey, set[tuple[str, str]]] = {}

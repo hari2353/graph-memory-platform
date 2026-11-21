@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Protocol
 
 from graph_memory.core.lexicon import lexical_hits
-from graph_memory.core.types import TenantId, UserKey
+from graph_memory.core.types import REFLECTION_KINDS, TenantId, UserKey
 from graph_memory.mapping.compiler import EdgeOp, ForgetOp, NodeOp
 
 
@@ -244,9 +244,20 @@ class InMemoryGraphGateway:
         self._edges = {key: op for key, op in self._edges.items() if op.kind != kind}
 
     def replace_all(self) -> None:
-        """Open a rebuild: stage into a hold-out readers cannot observe."""
-        self._staged_nodes = {}
-        self._staged_edges = {}
+        """Open a rebuild: stage into a hold-out readers cannot observe.
+
+        Reflection-owned rows are derived from the projected graph, not from
+        the ledger, so a replay preserves them; the next ``reflect`` tick
+        rewrites them wholesale.
+        """
+        preserved = {key: op for key, op in self._edges.items() if op.kind in REFLECTION_KINDS}
+        pairs = {
+            pair
+            for op in preserved.values()
+            for pair in ((op.tenant, op.user), (op.tenant, op.target))
+        }
+        self._staged_edges = preserved
+        self._staged_nodes = {key: op for key, op in self._nodes.items() if key in pairs}
 
     def commit_rebuild(self) -> None:
         """Publish the staged state atomically (single pointer swap)."""

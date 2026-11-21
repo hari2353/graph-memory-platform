@@ -24,7 +24,7 @@ from clickhouse_connect.driver.client import Client
 
 from graph_memory.chclient import bind_thread_local
 from graph_memory.chclient import default_client as default_client  # re-export (live tests)
-from graph_memory.core.types import TenantId, UserKey
+from graph_memory.core.types import REFLECTION_KINDS, TenantId, UserKey
 from graph_memory.mapping.compiler import EdgeOp, ForgetOp, NodeOp
 from graph_memory.projector.ddl import build_graph_ddl
 from graph_memory.projector.gateway import (
@@ -307,13 +307,29 @@ class ClickHouseGateway:
         """Open a rebuild: stage into hold-out tables readers never see.
 
         Truncating the STAGING side (not the published tables) keeps serving
-        readers on the last committed projection while the pass runs.
+        readers on the last committed projection while the pass runs. Rows
+        owned by the reflection tick (similarity + communities) are carried
+        into staging: replay re-derives signal rows only, and serve replays
+        every second — without this copy, communities vanish one tick later.
         """
+        staging_nodes = f"{self._database}.{self._staging_name(self._nodes_table)}"
+        staging_edges = f"{self._database}.{self._staging_name(self._edges_table)}"
+        published_nodes = f"{self._database}.{self._nodes_table}"
+        published_edges = f"{self._database}.{self._edges_table}"
+        kinds = ", ".join(f"'{kind}'" for kind in sorted(REFLECTION_KINDS))
+        node_columns = ", ".join(_NODES_COLUMNS)
+        edge_columns = ", ".join(_EDGES_COLUMNS)
+        self._client().command(f"TRUNCATE TABLE {staging_nodes}")
+        self._client().command(f"TRUNCATE TABLE {staging_edges}")
         self._client().command(
-            f"TRUNCATE TABLE {self._database}.{self._staging_name(self._nodes_table)}"
+            f"INSERT INTO {staging_edges} ({edge_columns}) "
+            f"SELECT {edge_columns} FROM {published_edges} WHERE kind IN ({kinds})"
         )
         self._client().command(
-            f"TRUNCATE TABLE {self._database}.{self._staging_name(self._edges_table)}"
+            f"INSERT INTO {staging_nodes} ({node_columns}) "
+            f"SELECT {node_columns} FROM {published_nodes} WHERE key IN ("
+            f"SELECT target FROM {published_edges} WHERE kind IN ({kinds}) "
+            f"UNION ALL SELECT user_key FROM {published_edges} WHERE kind IN ({kinds}))"
         )
         self._rebuild_open = True
 

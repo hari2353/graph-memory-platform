@@ -154,19 +154,40 @@ The 2-hop traversal is materialized at reflection time, so reads stay point
 lookups. The summary is structured (targets + support weights), not generated
 prose.
 
+The tick clears derived kinds once, globally, then rewrites every tenant.
+Replay carries these rows across its staged table swap, so serve's 1-second
+projection pass cannot erase a community. Schedule `platform reflect`; avoid
+running it at the same instant as a serve replay pass (the copy/swap window
+can drop a concurrent write until the next tick).
+
 ## Verification (the gates every commit passes)
+
+Live tier (ClickHouse 25.8 + Pulsar from `ops/compose`; ClickGraph is a
+separate pinned binary):
+
+```
+docker compose -f ops/compose/clickhouse.yaml up -d
+docker compose -f ops/compose/pulsar.yaml up -d
+export GMP_CLICKGRAPH_BINARY="$HOME/.cache/gmp-clickgraph/clickgraph"
+uv run pytest -m live              # 16 passed: gateways, ClickGraph, serve, E2E, ops, Pulsar
+```
+
+Offline + gates:
 
 ```
 uv run ruff check . && uv run ruff format .
 uv run mypy --strict src tests
 uv run pytest -m "not live"        # full offline suite (deterministic)
-uv run pytest -m live              # real ClickHouse + ClickGraph tier
 uv run platform bench hotpath --p99-budget 1s   # SLA gate: p99 ≤ 1s (exit 1 on miss)
 uv run platform bench token-budget              # payload ≤ 2K estimated tokens (exit 1 on overflow)
 uv run platform bench cost                      # §12 recompute within ±15% (exit 1 on drift)
 uv run platform evals trajectory --case tests/fixtures/trajectory/case.json \\
   --golden tests/fixtures/trajectory/golden.json  # step-level golden gate (exit 1 on drift)
 ```
+
+`tests/integration/test_end_to_end_live.py` is the operator journey: ingest
+over HTTP, serve projection, `platform reflect`, restart, then identical
+`community` payloads over REST and MCP after two replay ticks.
 
 Falsifiable success criteria (SPEC §16): divergence, replay convergence, SLA,
 7k-tenant scale, channel parity, cost, observability evidence — each has a

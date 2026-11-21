@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import time
 import urllib.request
@@ -36,8 +37,19 @@ from graph_memory.signals.ledger import InMemoryLedger, record_from_envelope
 
 _T = TenantId("acme")
 _SPEC_PATH = Path(__file__).parent.parent / "fixtures" / "mapping_skill_loop.yaml"
-_CG_BINARY = Path(r"F:\cg\target\debug\clickgraph.exe")
 _CG_PORT = 7478
+
+
+def _cg_binary() -> Path | None:
+    """ClickGraph lives outside the repo (Rust); env wins, then PATH."""
+    configured = os.environ.get("GMP_CLICKGRAPH_BINARY")
+    if configured:
+        path = Path(configured).expanduser()
+        return path if path.exists() else None
+    found = shutil.which("clickgraph")
+    return Path(found) if found else None
+
+
 _USERS_SKILLS = [
     ("user-1", "rust"),
     ("user-1", "go"),
@@ -136,6 +148,23 @@ def test_clickhouse_gateway_converges_with_memory_and_isolates_tenants() -> None
             if row.kind == "SIMILAR_TO"
         }
         assert similar_three == set()
+
+        # A bare replay (serve runs one every second) must carry reflection
+        # rows into the new projection; they are not derivable from signals.
+        ch_projector.replay()
+        assert {
+            row.target
+            for row in ch_gateway.observations(_T, UserKey("user-1"))
+            if row.kind == "SIMILAR_TO"
+        } == {"user-2"}
+        communities = {
+            row.target
+            for row in ch_gateway.observations(_T, UserKey("user-1"))
+            if row.kind == "MEMBER_OF"
+        }
+        assert len(communities) == 1
+        community_nodes = ch_gateway.nodes_of(_T, sorted(communities))
+        assert [node.labels for node in community_nodes] == [("community",)]
     finally:
         ch_gateway.client.command(f"DROP DATABASE IF EXISTS gmp_live_{run}")
 
@@ -158,7 +187,8 @@ def _cg_up() -> bool:
 
 
 def _start_clickgraph() -> subprocess.Popen[bytes] | None:
-    if not _CG_BINARY.exists():
+    binary = _cg_binary()
+    if binary is None:
         return None
     settings = Settings()
     env = {
@@ -170,7 +200,7 @@ def _start_clickgraph() -> subprocess.Popen[bytes] | None:
     }
     process = subprocess.Popen(
         [
-            str(_CG_BINARY),
+            str(binary),
             "--http-host",
             "127.0.0.1",
             "--http-port",
@@ -246,8 +276,8 @@ def test_clickgraph_serves_the_projected_graph() -> None:
     settings = Settings()
     if not _ch_online(settings):
         pytest.skip("ClickHouse not reachable at the configured endpoint")
-    if not _CG_BINARY.exists():
-        pytest.skip("clickgraph.exe not present")
+    if _cg_binary() is None:
+        pytest.skip("clickgraph binary not present (set GMP_CLICKGRAPH_BINARY or add it to PATH)")
 
     spec: MappingSpec = load_spec(_SPEC_PATH.read_text(encoding="utf-8"))
     ledger = InMemoryLedger()
