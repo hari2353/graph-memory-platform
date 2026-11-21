@@ -25,7 +25,9 @@ def test_query_footprint_data_bytes():
 
 
 def test_query_footprint_energy_math():
-    out = estimate_query_footprint(10, cpu_seconds=3600, power_w=100, pue=1.0, carbon_intensity_g_per_kwh=400)
+    out = estimate_query_footprint(
+        10, cpu_seconds=3600, power_w=100, pue=1.0, carbon_intensity_g_per_kwh=400
+    )
     assert out["kwh"] == 0.1
     assert out["kgco2e"] == 0.04
 
