@@ -13,10 +13,14 @@ on different hosts.
 
 from __future__ import annotations
 
-import fcntl
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows; the live tier is POSIX-only
+    fcntl = None  # type: ignore[assignment]
 
 
 @contextmanager
@@ -25,6 +29,8 @@ def projection_lock(path: Path | None) -> Iterator[None]:
     if path is None:
         yield
         return
+    if fcntl is None:  # pragma: no cover - Windows
+        raise RuntimeError("the projection lock needs POSIX fcntl; run serve and reflect on POSIX")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
