@@ -231,6 +231,21 @@ per `(tenant, lane)` token buckets — a whale backfill cannot starve co-tenants
 The tenant always rides the credential; cross-tenant access is not
 representable.
 
+## Query footprint (Harvard Edge TinyML-Footprint cross-pollination)
+
+`graph_memory.footprint` reports the data moved and energy cost of a memory
+query, the same way a model datasheet reports its footprint:
+
+```python
+from graph_memory.footprint import estimate_index_bytes, estimate_query_footprint
+
+estimate_index_bytes(entities=1000, episodes=5000, observations=200)
+estimate_query_footprint(rows=500, cpu_seconds=0.4, power_w=65, pue=1.2)
+```
+
+Counts and data bytes are exact; kWh/kgCO2e depend on explicit power/PUE/
+carbon assumptions. No new dependency.
+
 ## Cost posture (SPEC §12)
 
 7,000 tenants × 50k events/day ≈ 350M events/day ~1KB → **1.07 TB/mo
