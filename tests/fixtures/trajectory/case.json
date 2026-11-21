@@ -1,0 +1,59 @@
+{
+  "name": "skills-walk",
+  "mapping": "mapping.yaml",
+  "tenant": "acme",
+  "user": "user-1",
+  "now": "2026-06-10T00:00:00Z",
+  "events": [
+    {
+      "specversion": "1.0",
+      "id": "e1",
+      "source": "https://app.example.com/signals",
+      "type": "itf.skill_assessed.v1",
+      "time": "2026-06-01T12:00:00Z",
+      "partitionkey": "user-1",
+      "data": {"skill": "rust"}
+    },
+    {
+      "specversion": "1.0",
+      "id": "e2",
+      "source": "https://app.example.com/signals",
+      "type": "itf.skill_assessed.v1",
+      "time": "2026-06-01T12:00:01Z",
+      "partitionkey": "user-1",
+      "data": {"skill": "python"}
+    },
+    {
+      "specversion": "1.0",
+      "id": "e3",
+      "source": "https://app.example.com/signals",
+      "type": "itf.skill_assessed.v1",
+      "time": "2026-06-01T12:00:02Z",
+      "partitionkey": "user-2",
+      "data": {"skill": "rust"}
+    },
+    {
+      "specversion": "1.0",
+      "id": "e4",
+      "source": "https://app.example.com/signals",
+      "type": "itf.skill_assessed.v1",
+      "time": "2026-06-01T12:00:03Z",
+      "partitionkey": "user-2",
+      "data": {"skill": "python"}
+    },
+    {
+      "specversion": "1.0",
+      "id": "e5",
+      "source": "https://app.example.com/signals",
+      "type": "itf.skill_assessed.v1",
+      "time": "2026-06-01T12:00:04Z",
+      "partitionkey": "user-3",
+      "data": {"skill": "go"}
+    }
+  ],
+  "steps": [
+    {"capability": "skills", "k": 3},
+    {"capability": "skills", "k": 3, "as_of": "2026-05-01T00:00:00Z"},
+    {"capability": "community", "k": 10, "reflect": true}
+  ]
+}

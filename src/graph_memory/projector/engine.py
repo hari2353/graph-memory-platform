@@ -14,6 +14,7 @@ Determinism rules (SPEC §3, plan §3 risk 2):
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -32,8 +33,14 @@ from graph_memory.signals.ledger import LedgerRepository, StoredEvent
 
 _LN2 = log(2.0)
 _SIMILAR_KIND = "SIMILAR_TO"
+_COMMUNITY_MEMBER_KIND = "MEMBER_OF"
+_COMMUNITY_FACT_KIND = "COMMUNITY_HAS_SKILL"
+_REFLECTION_KINDS = frozenset({_SIMILAR_KIND, _COMMUNITY_MEMBER_KIND, _COMMUNITY_FACT_KIND})
+_COMMUNITY_MIN_MEMBERS = 2
+_COMMUNITY_MAX_FACTS = 50
 _SIMILAR_MIN_SHARED = 2
 _SIMILAR_HALF_LIFE_DAYS = 3650.0  # similarity is cohort-level, not skill-recency
+_COMMUNITY_HALF_LIFE_DAYS = 3650.0
 
 
 class CapabilityUnknown(PlatformError):
@@ -69,6 +76,8 @@ class ReflectionDigest:
     users_scanned: int
     pairs_scored: int
     similar_edges_written: int
+    communities_written: int = 0
+    community_edges_written: int = 0
 
 
 @dataclass(frozen=True)
@@ -94,6 +103,12 @@ def decayed_score(weight: float, half_life_days: float, valid_at: datetime, now:
 def _user_node(user: UserKey) -> str:
     """User nodes are keyed by the RAW user key (edges join on this id)."""
     return str(user)
+
+
+def _community_node(tenant: TenantId, members: Sequence[UserKey]) -> str:
+    """Stable community id: tenant + sorted membership, truncated SHA-256."""
+    seed = str(tenant) + "|" + "|".join(str(user) for user in sorted(members))
+    return "community:" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
 
 
 class Projector:
@@ -190,34 +205,45 @@ class Projector:
         )
 
     def reflect(self, *, min_shared: int = _SIMILAR_MIN_SHARED) -> ReflectionDigest:
-        """One reflection tick: rewrite SIMILAR_TO edges from current state.
+        """One reflection tick: rewrite SIMILAR_TO + community edges.
 
         Deterministic: users and pairs are visited in sorted order, the tick
-        reads one settled observation snapshot, and the similarity set is
-        rewritten wholesale (clear-first, never incrementally patched). The
-        injected Clock stamps the tick instant.
+        reads one settled observation snapshot, and every reflection-owned
+        kind is rewritten wholesale (clear-first, never incrementally
+        patched). Communities are the connected components of the similarity
+        graph; a fact shared by at least two members becomes a
+        COMMUNITY_HAS_SKILL edge weighted by support. That is the bounded
+        2-hop traversal (user -> community -> shared fact) the read path
+        serves through an ordinary capability. The injected Clock stamps
+        the tick instant.
         """
         users_scanned = 0
         pairs_scored = 0
-        written = 0
+        similar_edges = 0
+        communities_written = 0
+        community_edges = 0
         now = self._clock.now()
         for tenant in self._ledger.tenants():
-            self._gateway.clear_kind(_SIMILAR_KIND)
+            for kind in _REFLECTION_KINDS:
+                self._gateway.clear_kind(kind)
             users = self._gateway.users(tenant)
             users_scanned += len(users)
-            skills: dict[UserKey, set[tuple[str, str]]] = {}
+            facts: dict[UserKey, set[tuple[str, str]]] = {}
             for user in users:
-                skills[user] = {
+                facts[user] = {
                     (row.kind, row.target)
                     for row in self._gateway.observations(tenant, user)
-                    if row.kind != _SIMILAR_KIND
+                    if row.kind not in _REFLECTION_KINDS
                 }
+            adjacency: dict[UserKey, list[UserKey]] = {user: [] for user in users}
             ops: list[NodeOp | EdgeOp] = []
             for user_a, user_b in combinations(sorted(users), 2):
                 pairs_scored += 1
-                shared = len(skills[user_a] & skills[user_b])
+                shared = len(facts[user_a] & facts[user_b])
                 if shared < min_shared:
                     continue
+                adjacency[user_a].append(user_b)
+                adjacency[user_b].append(user_a)
                 ops.append(
                     NodeOp(
                         tenant=tenant,
@@ -246,13 +272,103 @@ class Projector:
                             valid_at=now,
                         )
                     )
-                written += 2
+                similar_edges += 2
+            ops.extend(
+                self._community_ops(
+                    tenant,
+                    users,
+                    facts,
+                    adjacency,
+                    now,
+                )
+            )
+            for op in ops:
+                if isinstance(op, EdgeOp) and op.kind in {
+                    _COMMUNITY_MEMBER_KIND,
+                    _COMMUNITY_FACT_KIND,
+                }:
+                    community_edges += 1
+            community_ids = {
+                op.key for op in ops if isinstance(op, NodeOp) and op.labels == ("community",)
+            }
+            communities_written += len(community_ids)
             self._gateway.apply(ops)
         return ReflectionDigest(
             users_scanned=users_scanned,
             pairs_scored=pairs_scored,
-            similar_edges_written=written,
+            similar_edges_written=similar_edges,
+            communities_written=communities_written,
+            community_edges_written=community_edges,
         )
+
+    def _community_ops(
+        self,
+        tenant: TenantId,
+        users: list[UserKey],
+        facts: Mapping[UserKey, set[tuple[str, str]]],
+        adjacency: Mapping[UserKey, list[UserKey]],
+        now: datetime,
+    ) -> list[NodeOp | EdgeOp]:
+        """Connected components -> one community node + bounded support edges."""
+        ops: list[NodeOp | EdgeOp] = []
+        seen: set[UserKey] = set()
+        for start in sorted(users):
+            if start in seen:
+                continue
+            stack = [start]
+            component: list[UserKey] = []
+            while stack:
+                current = stack.pop()
+                if current in seen:
+                    continue
+                seen.add(current)
+                component.append(current)
+                stack.extend(adjacency[current])
+            if len(component) < _COMMUNITY_MIN_MEMBERS:
+                continue
+            component.sort()
+            community_id = _community_node(tenant, component)
+            ops.append(
+                NodeOp(
+                    tenant=tenant,
+                    key=community_id,
+                    labels=("community",),
+                    props={"size": str(len(component))},
+                )
+            )
+            counts: dict[tuple[str, str], int] = {}
+            for member in component:
+                for fact in facts[member]:
+                    counts[fact] = counts.get(fact, 0) + 1
+            shared = sorted(
+                (fact for fact, count in counts.items() if count >= 2),
+                key=lambda fact: (-counts[fact], fact[0], fact[1]),
+            )[:_COMMUNITY_MAX_FACTS]
+            for member in component:
+                ops.append(
+                    EdgeOp(
+                        tenant=tenant,
+                        user=member,
+                        kind=_COMMUNITY_MEMBER_KIND,
+                        target=community_id,
+                        weight=1.0,
+                        half_life_days=_COMMUNITY_HALF_LIFE_DAYS,
+                        valid_at=now,
+                    )
+                )
+                for fact in shared:
+                    ops.append(
+                        EdgeOp(
+                            tenant=tenant,
+                            user=member,
+                            kind=_COMMUNITY_FACT_KIND,
+                            target=fact[1],
+                            weight=float(counts[fact]),
+                            half_life_days=_COMMUNITY_HALF_LIFE_DAYS,
+                            valid_at=now,
+                        )
+                    )
+        return ops
 
     def snapshot(self, tenant: TenantId, user: UserKey, capability: Capability) -> SnapshotDoc:
         """Build the read-model doc; group (kind, target), score, truncate top_k."""

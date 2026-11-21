@@ -100,7 +100,7 @@ src/graph_memory/
   channels/     mcp/ rest/ webhooks/ sdk.py — every channel a renderer
   tenancy/      registry (in-memory + durable CH rows), quotas, guards
   loop/         effectiveness tick + apply_effectives + the continuous pass
-  evals/        hit-rate@k, counterfactual replay, lift (SPEC §11/R7)
+  evals/        hit-rate@k, counterfactual replay, lift, trajectory golden gate (SPEC §11/R7)
   observability/ CH span-stub audit sink + metering tables + observer port
   spikit/       broker conformance kit (the adapters' shared test kit)
   ops/          CLI: platform replay|serve|loop|tenancy|spans|metering|bench|drain-brokers
@@ -133,6 +133,27 @@ channel uses - one ledger, no second ingest truth; poison lands in the DLQ.
 Parity e2e: one provider, three real HTTP surfaces, identical rendered payloads
 (`tests/integration/test_channel_parity.py`).
 
+## Community context (deterministic GraphRAG)
+
+`platform reflect` rewrites two derived layers in one deterministic tick:
+pairwise `SIMILAR_TO` edges (shared facts ≥ `--min-shared`) and connected-
+component communities. Each member gets `MEMBER_OF`; every fact shared by at
+least two members becomes `COMMUNITY_HAS_SKILL` weighted by support. Declare
+the capability and serve it through the normal context path — no new MCP tool,
+no LLM, no write-time model:
+
+```yaml
+capabilities:
+  community:
+    relations: [MEMBER_OF, COMMUNITY_HAS_SKILL]
+    top_k: 20
+    max_tokens: 2000
+```
+
+The 2-hop traversal is materialized at reflection time, so reads stay point
+lookups. The summary is structured (targets + support weights), not generated
+prose.
+
 ## Verification (the gates every commit passes)
 
 ```
@@ -141,7 +162,10 @@ uv run mypy --strict src tests
 uv run pytest -m "not live"        # full offline suite (deterministic)
 uv run pytest -m live              # real ClickHouse + ClickGraph tier
 uv run platform bench hotpath --p99-budget 1s   # SLA gate: p99 ≤ 1s (exit 1 on miss)
+uv run platform bench token-budget              # payload ≤ 2K estimated tokens (exit 1 on overflow)
 uv run platform bench cost                      # §12 recompute within ±15% (exit 1 on drift)
+uv run platform evals trajectory --case tests/fixtures/trajectory/case.json \\
+  --golden tests/fixtures/trajectory/golden.json  # step-level golden gate (exit 1 on drift)
 ```
 
 Falsifiable success criteria (SPEC §16): divergence, replay convergence, SLA,
@@ -156,6 +180,8 @@ uv run platform replay                       # read-only ledger plan
 uv run platform replay run --mapping PATH    # full rebuild = tick + replay (loop included)
 uv run platform replay run --mapping PATH --from 2026-06-01T12:00:00Z   # additive resume
 uv run platform loop run  --mapping PATH     # effectiveness tick, standalone (report + revalidated replay)
+uv run platform reflect   --mapping PATH     # similarity + community projection tick
+uv run platform evals trajectory --case PATH --golden PATH  # golden journey gate
 uv run platform tenancy onboard TENANT       # durable CH metadata row (no per-tenant DDL)
 uv run platform tenancy list | status TENANT # lifecycle visibility
 uv run platform spans --limit 20             # span audit-stub table (§11)

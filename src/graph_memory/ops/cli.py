@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 from collections.abc import Mapping
@@ -344,6 +345,122 @@ def loop_run(mapping_path: str, backend: str) -> None:
                 f"signal={cell.reco_signal}: attached={cell.attached} "
                 f"positive={cell.positive} rate={cell.rate:.3f} multiplier={cell.multiplier:.3f}"
             )
+
+
+@cli.command("reflect")
+@click.option("--mapping", "mapping_path", required=True, help="mapping spec YAML path")
+@click.option("--min-shared", default=2, show_default=True, help="shared facts for similarity")
+@click.option(
+    "--backend",
+    type=click.Choice(["clickhouse"]),
+    default="clickhouse",
+    show_default=True,
+)
+def reflect(mapping_path: str, min_shared: int, backend: str) -> None:
+    """Run one reflection tick: SIMILAR_TO + deterministic communities."""
+    from pathlib import Path
+
+    from graph_memory.mapping.spec import load_spec
+    from graph_memory.projector.gateway_clickhouse import ClickHouseGateway
+
+    settings = Settings()
+    ledger = _ledger(backend, settings)
+    gateway = ClickHouseGateway(settings)
+    gateway.ensure_graph_schema()
+    spec = load_spec(Path(mapping_path).read_text(encoding="utf-8"))
+    digest = Projector(spec, ledger, gateway, SystemClock()).reflect(min_shared=min_shared)
+    click.echo(
+        f"reflect: users={digest.users_scanned} pairs={digest.pairs_scored} "
+        f"similar_edges={digest.similar_edges_written} "
+        f"communities={digest.communities_written} "
+        f"community_edges={digest.community_edges_written}"
+    )
+
+
+@cli.group()
+def evals() -> None:
+    """Offline eval gates (SPEC §11): deterministic, no LLM, exit 1 on drift."""
+
+
+@evals.command("trajectory")
+@click.option(
+    "--case",
+    "case_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="trajectory case JSON (mapping path relative to it)",
+)
+@click.option(
+    "--golden",
+    "golden_path",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="checked-in golden JSON to enforce",
+)
+@click.option(
+    "--write-golden",
+    "write_path",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="write the current trace as the golden and exit 0",
+)
+def evals_trajectory(case_path: str, golden_path: str | None, write_path: str | None) -> None:
+    """Replay a step script and gate on per-step targets + digest."""
+    from pathlib import Path
+
+    from graph_memory.core.clock import FixedClock
+    from graph_memory.core.errors import PlatformError
+    from graph_memory.evals.trajectory import (
+        check_golden,
+        golden_payload,
+        load_case,
+        run_trajectory,
+    )
+
+    try:
+        fixture = load_case(Path(case_path))
+        trace = run_trajectory(
+            fixture.spec,
+            fixture.ledger,
+            FixedClock(fixture.now),
+            case=fixture.case,
+            tenant=fixture.tenant,
+            user=fixture.user,
+            steps=fixture.steps,
+        )
+    except (PlatformError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    if write_path is not None:
+        Path(write_path).write_text(
+            json.dumps(golden_payload(trace), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        click.echo(f"wrote golden: {write_path} digest={trace.digest}")
+        return
+    if golden_path is None:
+        click.echo(json.dumps(golden_payload(trace), indent=2, sort_keys=True))
+        return
+    try:
+        golden = json.loads(Path(golden_path).read_text(encoding="utf-8"))
+        if not isinstance(golden, dict):
+            raise ValueError("golden must be a JSON object")
+        result = check_golden(trace, golden)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise click.ClickException(f"invalid golden: {exc}") from exc
+    for delta in result.deltas:
+        if delta.diverged:
+            click.echo(
+                f"step {delta.index} capability={delta.capability} "
+                f"expected={list(delta.expected)} actual={list(delta.actual)}"
+            )
+    if not result.digest_matches:
+        click.echo(f"digest expected={result.expected_digest} actual={result.actual_digest}")
+    verdict = "PASSED" if result.passed else "FAILED"
+    click.echo(
+        f"TRAJECTORY {trace.case} steps={len(trace.steps)} digest={trace.digest} -> {verdict}"
+    )
+    if not result.passed:
+        raise SystemExit(1)
 
 
 @cli.command()

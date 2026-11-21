@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 
 from graph_memory.core.clock import Clock
 from graph_memory.core.types import Capability, Json, TenantId, UserKey
@@ -38,9 +39,19 @@ def _json_list(items: Iterable[str]) -> list[Json]:
 
 
 def _top_targets(
-    engine: Projector, tenant: TenantId, user: UserKey, capability: str, k: int
+    engine: Projector,
+    tenant: TenantId,
+    user: UserKey,
+    capability: str,
+    k: int,
+    *,
+    as_of: datetime | None = None,
 ) -> tuple[str, ...]:
-    doc = engine.snapshot(tenant, user, Capability(capability))
+    doc = (
+        engine.snapshot_at(tenant, user, Capability(capability), as_at=as_of)
+        if as_of is not None
+        else engine.snapshot(tenant, user, Capability(capability))
+    )
     items = doc.payload["items"]
     if not isinstance(items, list):  # pragma: no cover - engine contract
         raise TypeError("snapshot payload items must be a list")

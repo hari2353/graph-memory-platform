@@ -1,0 +1,22 @@
+mapping_version: 1
+signals:
+  itf.skill_assessed.v1:
+    nodes:
+      - key: "skill:{data.skill}"
+        labels: [skill]
+        props:
+          name: "{data.skill}"
+    edges:
+      - kind: HAS_SKILL
+        target: "skill:{data.skill}"
+        weight: 1.0
+        half_life_days: 180
+capabilities:
+  skills:
+    relations: [HAS_SKILL]
+    top_k: 5
+    ttl_ms: 60000
+  community:
+    relations: [MEMBER_OF, COMMUNITY_HAS_SKILL]
+    top_k: 10
+    ttl_ms: 60000

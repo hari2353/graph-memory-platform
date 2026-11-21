@@ -1,0 +1,24 @@
+{
+  "digest": "d9c2f9ed03f8d6879c02152c035c35aaa34dfe1fbe18f4ecbe032bf572d6a532",
+  "steps": [
+    {
+      "capability": "skills",
+      "targets": [
+        "skill:python",
+        "skill:rust"
+      ]
+    },
+    {
+      "capability": "skills",
+      "targets": []
+    },
+    {
+      "capability": "community",
+      "targets": [
+        "skill:python",
+        "skill:rust",
+        "community:59000b97f98b76d4"
+      ]
+    }
+  ]
+}

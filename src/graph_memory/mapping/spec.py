@@ -40,7 +40,9 @@ _KIND = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 _LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,31}$")
 _PLACEHOLDER = re.compile(r"\{([A-Za-z0-9_.]+)\}")
 _RESERVED_PLACEHOLDERS = frozenset({"partitionkey", "id", "source", "type", "time"})
-_SYSTEM_KINDS = frozenset({"SIMILAR_TO"})  # written by reflection, not by signals
+_SYSTEM_KINDS = frozenset(
+    {"SIMILAR_TO", "MEMBER_OF", "COMMUNITY_HAS_SKILL"}
+)  # written by reflection, not by signals
 
 
 class MappingError(PlatformError):

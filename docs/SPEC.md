@@ -73,7 +73,7 @@ federation; no per-tenant clusters except the whale-class tier.
                               ▼
               projector: deterministic, replay-idempotent projection
               ├─ graph upserts (bi-temporal edges, weights, decay) via ClickGraph write path
-              ├─ reflection jobs: recency/decay, similarity + community (Jaccard/Louvain)
+              ├─ reflection jobs: recency/decay, similarity + connected-component communities
               └─ materializations: profile_snapshots + adjacency rollups (the read model)
                               │
         effectiveness-loop ◀──┘ (outcomes → RECOMMENDED/ACTS_ON/OUTCOME edges → scoring → weights)
@@ -126,11 +126,11 @@ modifying.
 | `signals` | CloudEvents 1.0.2 envelope, `partitionkey=user_key`; HTTP `POST /v1/signals:batch` (idempotency by `source+id`); broker adapters via a conformance-kitted SPI — Kafka, Pulsar, NATS at M2; SNS/SQS (SNS FIFO → SQS), Azure Service Bus, Google Pub/Sub, Kinesis, Redis Streams as drop-in follow-ups; ledger dedup is the correctness owner (broker dedup is best-effort [02]); DLQ per route, bounded redelivery; at-least-once in, at-most-once-effect visible |
 | `tenancy` | Shared storage: `tenant_id` in primary keys, **time-only partitions** (never tenant partitions [03]); tenant registry rows + quota rows (quota keyed `tenant_id` on one service user; `queries_per_normalized_hash` flood control); two-phase offboarding (revoke → async purge w/ audit window); tenant-class tier map (≤5 replica-set classes) |
 | `memory-mapping` | Versioned YAML: `signals → entities/edges/upserts`, weights, decay curves, ttl + `max_tokens` payload budgets; compiled to deterministic SQL; additive-only evolution (v2 may not reinterpret v1 payloads); compiled artifact replayable against any ledger retention window |
-| `projector` | Incremental projection per signal batch + full replay command; reflection jobs (decay tick, similarity edges, community recompute) scheduled by sim-friendly Clock; maintains `profile_snapshots` + `user_adjacency_rollup` (the read model) and staleness metadata |
+| `projector` | Incremental projection per signal batch + full replay command; reflection jobs (decay tick, similarity edges, deterministic connected-component communities with `MEMBER_OF`/`COMMUNITY_HAS_SKILL` support edges) scheduled by sim-friendly Clock; maintains `profile_snapshots` + `user_adjacency_rollup` (the read model) and staleness metadata |
 | `context-service` | Pure read model: `ContextProvider.get(user, capability)` = ≤3 tenant-scoped point lookups over snapshots/rollups + assembly; per-user cache (jittered TTL + single-flight/XFetch); response includes `generated_at`, `max_age_ms` (staleness surfaced, never silent [04]); assembly truncates to the capability's `max_tokens` by rank and surfaces `truncated`/`omitted` (overflow prevention, never a silent cut) |
 | `outputs` | MCP first: ≤4 tools — `get_context`, `search_memory`, `get_effectiveness` (scores), `explain_context` (a graph-annotated provenance view); compact `structuredContent` + `resource_link`, summary ≤8k tokens enforced per capability (`max_tokens`, default 2,000; `truncated`/`omitted` surfaced), `ttlMs`/`cacheScope` hints; REST `/v1` user-scoped reads (`Idempotency-Key` writes, cursor pagination, ETag); webhooks HMAC `{id}.{ts}.{raw}` with retry ladder; SDKs = thin REST clients prewired with OTel [05] |
 | `effectiveness-loop` | Generic: any app registers a "recommendation" signal type; outcome signals close the loop (`acted_on`, `outcome_improved`, feedback); scoring job computes effectiveness per (cohort/space, recommendation); context-service biases via weights; observer-LLM behind `LlmObserver` port produces instincts (Loop 2) later |
-| `observability` | Span-per-phase on hot path (`authn → authz → lookup → assemble → reply`) for falsifiable p99; sampling = config (per-tenant head + tail-on-error/p99) with unsampled CH span-stub audit table; metering: per-tenant requests/quota/throttle tables from day 1 [03]; eval harness: offline hit-rate@k, counterfactual replay, held-out lift; A/B with pre-registered guardrails, ≥1-week windows [05] |
+| `observability` | Span-per-phase on hot path (`authn → authz → lookup → assemble → reply`) for falsifiable p99; sampling = config (per-tenant head + tail-on-error/p99) with unsampled CH span-stub audit table; metering: per-tenant requests/quota/throttle tables from day 1 [03]; eval harness: offline hit-rate@k, counterfactual replay, held-out lift, and a golden trajectory gate (step targets + digest, CLI exit 1); A/B with pre-registered guardrails, ≥1-week windows [05] |
 | `platform-ops` | Embedded dev (chdb), docker-compose replica-set (3 nodes + MinIO S3 cold); schema carries the cost levers: TTL + `TTL … GROUP BY … SET` rollups, `Delta/ZSTD` codecs, `LowCardinality` enums;
       load CI: synthetic 7k-tenant onboarding (metadata-only ≤ seconds) + p99 ≤1s steady-state gate + replay-rebuild equality; per-tenant restore = tenant-filtered export/replay |
 
@@ -234,8 +234,10 @@ Every hot-path request emits one trace with per-stage spans → Langfuse
 audit-span-stub table (full auditability without egress cost). The **eval
 harness** is how personalization is *proven*: offline hit-rate@k on held-out
 users, counterfactual replay of recommendation histories, held-out outcome
-lift; online experiments require a pre-registered plan (metric, guardrails,
-window) — the divergence assertion (§16) is the flagship offline eval.
+lift, and a **golden trajectory gate** that replays an ordered step script and
+fails on the first target or digest drift (PR-blocking, no LLM); online
+experiments require a pre-registered plan (metric, guardrails, window) — the
+divergence assertion (§16) is the flagship offline eval.
 
 ---
 
