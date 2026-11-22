@@ -4,6 +4,7 @@ A migration is a versioned SQL statement. The planner returns the pending ones
 in version order and validates that versions and checksums are consistent, so
 a deploy can be reviewed before anything runs. No database dependency.
 """
+
 from __future__ import annotations
 
 import hashlib

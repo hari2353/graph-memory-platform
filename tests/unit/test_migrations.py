@@ -33,9 +33,11 @@ def test_validate_chain_clean():
 
 
 def test_migration_rejects_invalid():
-    for kwargs in ({"version": 0, "name": "a", "sql": "SELECT 1"},
-                   {"version": 1, "name": " ", "sql": "SELECT 1"},
-                   {"version": 1, "name": "a", "sql": " "}):
+    for kwargs in (
+        {"version": 0, "name": "a", "sql": "SELECT 1"},
+        {"version": 1, "name": " ", "sql": "SELECT 1"},
+        {"version": 1, "name": "a", "sql": " "},
+    ):
         try:
             Migration(**kwargs)
         except ValueError:
