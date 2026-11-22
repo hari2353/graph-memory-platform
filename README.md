@@ -246,7 +246,7 @@ estimate_query_footprint(rows=500, cpu_seconds=0.4, power_w=65, pue=1.2)
 Counts and data bytes are exact; kWh/kgCO2e depend on explicit power/PUE/
 carbon assumptions. No new dependency.
 
-## Cost posture (SPEC §12)
+## Multi-hop traversal (UC Berkeley RISE cross-pollination)\n\n`graph_memory.traversal` provides BFS layers, shortest path and reachability\nsets over a projected adjacency mapping, without a graph-database round trip.\n\n## Cost posture (SPEC §12)
 
 7,000 tenants × 50k events/day ≈ 350M events/day ~1KB → **1.07 TB/mo
 compressed** (recomputed in CI from the synthetic fixture), 12.8 TB at 12-month
