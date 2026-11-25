@@ -13,7 +13,7 @@ def should_failover(
     replica_lag_s: float,
     max_lag_s: float = 30.0,
     replica_healthy: bool = True,
-) -> dict:
+) -> dict[str, object]:
     if primary_lag_s < 0 or replica_lag_s < 0 or max_lag_s < 0:
         raise ValueError("lag values must be >= 0")
     reasons: list[str] = []

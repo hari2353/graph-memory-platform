@@ -1,15 +1,15 @@
 from graph_memory.footprint import estimate_index_bytes, estimate_query_footprint
 
 
-def test_index_bytes_zero():
+def test_index_bytes_zero() -> None:
     assert estimate_index_bytes() == 0
 
 
-def test_index_bytes_scales():
+def test_index_bytes_scales() -> None:
     assert estimate_index_bytes(entities=10, episodes=5) > 0
 
 
-def test_index_bytes_rejects_negative():
+def test_index_bytes_rejects_negative() -> None:
     for kwargs in ({"entities": -1}, {"episodes": -1}, {"observations": -1}, {"edges": -1}):
         try:
             estimate_index_bytes(**kwargs)
@@ -18,13 +18,13 @@ def test_index_bytes_rejects_negative():
         raise AssertionError(f"accepted invalid input: {kwargs}")
 
 
-def test_query_footprint_data_bytes():
+def test_query_footprint_data_bytes() -> None:
     out = estimate_query_footprint(100, bytes_per_row=256)
     assert out["data_bytes"] == 25600
     assert out["rows"] == 100
 
 
-def test_query_footprint_energy_math():
+def test_query_footprint_energy_math() -> None:
     out = estimate_query_footprint(
         10, cpu_seconds=3600, power_w=100, pue=1.0, carbon_intensity_g_per_kwh=400
     )
@@ -32,7 +32,7 @@ def test_query_footprint_energy_math():
     assert out["kgco2e"] == 0.04
 
 
-def test_query_footprint_rejects_bad_inputs():
+def test_query_footprint_rejects_bad_inputs() -> None:
     for kwargs in (
         {"rows": -1, "bytes_per_row": 256},
         {"rows": 10, "bytes_per_row": -1},

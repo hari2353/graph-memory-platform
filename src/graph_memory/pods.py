@@ -8,7 +8,7 @@ central router. Pure Python.
 from __future__ import annotations
 
 
-def assign_pods(tenants: list[str], pod_capacity: int) -> dict:
+def assign_pods(tenants: list[str], pod_capacity: int) -> dict[str, object]:
     if pod_capacity < 1:
         raise ValueError("pod_capacity must be >= 1")
     if not isinstance(tenants, list):

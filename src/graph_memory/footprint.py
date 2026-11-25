@@ -37,8 +37,7 @@ def estimate_query_footprint(
     power_w: float = 0.0,
     pue: float = 1.15,
     carbon_intensity_g_per_kwh: float = 400.0,
-) -> dict:
-    """Footprint of one memory query: data moved plus compute energy."""
+) -> dict[str, object]:
     if rows < 0:
         raise ValueError("rows must be >= 0")
     if bytes_per_row < 0:

@@ -19,7 +19,7 @@ def shard_for(key: str, num_shards: int) -> int:
     return int(digest, 16) % num_shards
 
 
-def balance_shards(keys: list[str], num_shards: int) -> dict:
+def balance_shards(keys: list[str], num_shards: int) -> dict[str, object]:
     if num_shards < 1:
         raise ValueError("num_shards must be >= 1")
     counts = [0] * num_shards
