@@ -251,6 +251,12 @@ carbon assumptions. No new dependency.
 `graph_memory.migrations` plans versioned SQL migrations: pending set in
 version order, duplicate-version rejection, gap and checksum-drift validation.
 
+## Sharding, pods & failover (Notion/Pinterest/Shopify/GitHub cross-pollination)
+
+`graph_memory.sharding` (consistent hashing + balance report), `pods`
+(capacity-aware pod assignment) and `failover` (replication lag decision) help
+scale a multi-tenant graph store.
+
 ## Cost posture (SPEC §12)
 
 7,000 tenants × 50k events/day ≈ 350M events/day ~1KB → **1.07 TB/mo
