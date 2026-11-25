@@ -4,6 +4,7 @@ Pure functions over an adjacency mapping ``{node: [neighbor, ...]}``. The
 platform projects a memory graph into ClickHouse; these helpers let a caller
 walk it (BFS layers, shortest path) without a graph database round-trip.
 """
+
 from __future__ import annotations
 
 from collections import deque
@@ -62,4 +63,3 @@ def shortest_path(adj: Mapping[Any, Any], src: Any, dst: Any) -> list[Any] | Non
 def reachable(adj: Mapping[Any, Any], start: Any, *, max_depth: int = 3) -> set[Any]:
     """Set of nodes reachable from start within max_depth hops (inclusive)."""
     return {node for node, _depth in bfs(adj, start, max_depth=max_depth)}
-
