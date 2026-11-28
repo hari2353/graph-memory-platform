@@ -1,7 +1,7 @@
 from graph_memory.consumer import IdempotentConsumer
 
 
-def test_processes_unique_events():
+def test_processes_unique_events() -> None:
     c = IdempotentConsumer()
     seen = []
     assert c.handle({"id": "1"}, lambda e: seen.append(e["id"])) is True
@@ -10,7 +10,7 @@ def test_processes_unique_events():
     assert c.processed_count() == 2
 
 
-def test_dedups_duplicate_events():
+def test_dedups_duplicate_events() -> None:
     c = IdempotentConsumer()
     calls = []
     c.handle({"id": "1"}, lambda e: calls.append(1))
@@ -19,7 +19,7 @@ def test_dedups_duplicate_events():
     assert c.processed_count() == 1
 
 
-def test_requires_event_id():
+def test_requires_event_id() -> None:
     c = IdempotentConsumer()
     try:
         c.handle({}, lambda e: None)

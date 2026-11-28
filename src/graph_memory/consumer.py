@@ -10,9 +10,9 @@ from __future__ import annotations
 class IdempotentConsumer:
     def __init__(self) -> None:
         self._seen: set[str] = set()
-        self._processed: list[dict] = []
+        self._processed: list[dict[str, object]] = []
 
-    def handle(self, event: dict, handler) -> bool:
+    def handle(self, event: dict[str, object], handler: object) -> bool:
         """Return True if the event was processed, False if duplicate."""
         eid = str(event.get("id", ""))
         if not eid:
@@ -20,7 +20,8 @@ class IdempotentConsumer:
         if eid in self._seen:
             return False
         self._seen.add(eid)
-        handler(event)
+        handler(event)  # type: ignore[operator]
+
         self._processed.append(event)
         return True
 

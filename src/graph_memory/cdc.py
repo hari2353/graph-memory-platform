@@ -32,11 +32,11 @@ class CdcCursor:
 
 
 def changed_since(
-    records: list[dict], last_position: int, *, key: str = "seq"
-) -> tuple[list[dict], int]:
+    records: list[dict[str, object]], last_position: int, *, key: str = "seq"
+) -> tuple[list[dict[str, object]], int]:
     """Return records with position > last_position and the new watermark."""
     if last_position < 0:
         raise ValueError("last_position must be >= 0")
-    new = [r for r in records if int(r.get(key, 0)) > last_position]
-    watermark = max((int(r.get(key, 0)) for r in new), default=last_position)
+    new = [r for r in records if int(str(r.get(key, 0))) > last_position]
+    watermark = max((int(str(r.get(key, 0))) for r in new), default=last_position)
     return new, watermark
