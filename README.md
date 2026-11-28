@@ -246,6 +246,11 @@ estimate_query_footprint(rows=500, cpu_seconds=0.4, power_w=65, pue=1.2)
 Counts and data bytes are exact; kWh/kgCO2e depend on explicit power/PUE/
 carbon assumptions. No new dependency.
 
+## CDC & idempotent consumption (Shopify/Spotify/DoorDash cross-pollination)
+
+`graph_memory.cdc` (cursor + changed-since) and `consumer` (idempotent
+event handler) support change-data-capture and at-least-once delivery.
+
 ## Multi-hop traversal (UC Berkeley RISE cross-pollination)\n\n`graph_memory.traversal` provides BFS layers, shortest path and reachability\nsets over a projected adjacency mapping, without a graph-database round trip.\n\n## Schema migrations (Snowflake schemachange cross-pollination)
 
 `graph_memory.migrations` plans versioned SQL migrations: pending set in
